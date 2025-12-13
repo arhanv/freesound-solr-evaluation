@@ -1,0 +1,12 @@
+volumes:
+    solr9data:
+
+services:
+    search:
+        image: solr:9.8.1
+        command: ["-c"]
+        volumes:
+            - solr9data:/var/solr
+        ports:
+            - "8983:8983"
+  
