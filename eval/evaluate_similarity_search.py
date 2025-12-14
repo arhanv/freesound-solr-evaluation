@@ -93,7 +93,7 @@ def similarity_search_solr(query_vector, similarity_space, k, solr_url=SOLR_URL)
 
 	return results, query_time
 
-def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None, similarity_space='laion_clap', k=N_NEIGHBORS, results_csv="eval/results/eval_results.csv", save_to_csv=True, warmup=0, solr_url=SOLR_URL, seed=42):
+def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None, similarity_space='laion_clap', k=N_NEIGHBORS, results_csv="eval/results/eval_results.csv", save_to_csv=True, warmup=0, solr_url=SOLR_URL, seed=42, save_details=False):
 	"""
 	Evaluate similarity search latency and recall.
 
@@ -125,10 +125,14 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
 	retrieved_neighbors = []
 	recalls = []
 
+	warmup_times = []
 	if warmup > 0:
-		print(f"Running {warmup} warmup queries...")
-		for _ in range(warmup):
-			similarity_search_solr(target_sound_vecs[0].tolist(), similarity_space, k, solr_url)
+		print(f"Running {warmup} warmup queries (sampled from target set)...")
+		# Sample random indices for warmup to avoid caching effects of a single vector
+		warmup_indices = np.random.choice(len(target_sound_vecs), size=warmup, replace=True)
+		for idx in tqdm(warmup_indices, desc="Warmup"):
+			 _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, k, solr_url)
+			 warmup_times.append(w_time)
 
 	print(f"Querying Solr with {len(target_sound_vecs)} target sounds...")
 
@@ -166,15 +170,21 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
 		print(f"\n\nWarning: {empty_result_count}/{len(target_sound_vecs)} queries returned 0 results")
 		print(f"This will negatively impact recall metrics.")
 
+	mean_latency = np.mean(query_times)
+	warmup_mean = np.mean(warmup_times) if warmup_times else 0.0
+	warmup_penalty_pct = ((warmup_mean - mean_latency) / mean_latency * 100) if mean_latency > 0 and warmup_times else 0.0
+
 	performance_metrics = {
 		'latency_p50': np.percentile(query_times, 50),
 		'latency_p95': np.percentile(query_times, 95),
 		'latency_p99': np.percentile(query_times, 99),
-		'mean_latency': np.mean(query_times),
-		'qps': 1000 / np.mean(query_times),
+		'mean_latency': mean_latency,
+		'qps': 1000 / mean_latency if mean_latency > 0 else 0,
 		'recall_mean': np.mean(recalls) if recalls else 0.0,
 		'recall_std': np.std(recalls) if recalls else 0.0,
-		'empty_results': empty_result_count
+		'empty_results': empty_result_count,
+		'warmup_mean': warmup_mean,
+		'warmup_penalty_pct': warmup_penalty_pct
 	}
 
 	search_evaluation_result = SearchEvaluationResult(
@@ -192,6 +202,31 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
 		retrieved_neighbors=retrieved_neighbors,
 		metrics=performance_metrics
 	)
+
+	if save_details:
+		details_data = []
+		for i in range(len(target_sound_ids)):
+			details_data.append({
+				'query_index': i,
+				'sound_id': target_sound_ids[i],
+				'latency_ms': query_times[i],
+				'recall': recalls[i] if i < len(recalls) else None,
+				'similarity_space': similarity_space,
+				'seed': seed
+			})
+		
+		details_df = pd.DataFrame(details_data)
+		# Construct filename: details_<similarity_space>_<seed>.pkl
+		# Ensure directory exists
+		output_dir = os.path.dirname(results_csv)
+		if not output_dir:
+			output_dir = '.'
+		if not os.path.exists(output_dir):
+			os.makedirs(output_dir)
+			
+		details_filename = os.path.join(output_dir, f"details_{similarity_space}_{seed}.pkl")
+		details_df.to_pickle(details_filename)
+		print(f"Saved detailed query results to {details_filename}.")
 
 	if save_to_csv:
 		search_evaluation_result.to_csv(filepath=results_csv, append=True)
@@ -288,6 +323,7 @@ if __name__ == "__main__":
 	parser.add_argument('--warmup', type=int, default=0, help='Number of warmup queries (default: 0)')
 	parser.add_argument('--clear-cache', action='store_true', help='Reload collection to clear cache before running')
 	parser.add_argument('--seed', type=int, default=42, help='Random seed for query selection')
+	parser.add_argument('--save-details', action='store_true', help='Save detailed per-query metrics to pickled dataframe')
 
 	args = parser.parse_args()
 	
@@ -330,7 +366,9 @@ if __name__ == "__main__":
 			k=args.k,
 			results_csv=args.results_csv,
 			save_to_csv=False,
-			warmup=args.warmup
+			warmup=args.warmup,
+			seed=args.seed,
+			save_details=args.save_details
 		)
 		ground_truth = gt_result.retrieved_neighbors
 		
@@ -376,6 +414,7 @@ if __name__ == "__main__":
 		results_csv=args.results_csv,
 		save_to_csv=True,
 		warmup=args.warmup,
-		seed=args.seed
+		seed=args.seed,
+		save_details=args.save_details
 	)
 

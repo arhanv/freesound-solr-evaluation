@@ -79,31 +79,79 @@ def load_vectors_from_solr(similarity_space, solr_url=SOLR_URL, max_vectors=None
 
 	# Query for child documents with this similarity space
 	query = f'content_type:v AND similarity_space:{similarity_space}'
-	rows = max_vectors if max_vectors else 1000000
+	
+	print(f"Counting vectors for {similarity_space}...")
+	try:
+		total_hits = solr.search(query, rows=0).hits
+	except Exception as e:
+		print(f"Error checking count: {e}")
+		total_hits = 0
 
-	print(f"Loading vectors from Solr (similarity_space={similarity_space})...")
-	results = solr.search(query, rows=rows, fl='*,[child]')
+	limit = max_vectors if max_vectors else total_hits
+	print(f"Loading {limit} vectors from Solr (similarity_space={similarity_space})...")
 
 	vectors = []
 	sound_ids = []
 	child_docs = []
 
+	cursor_mark = '*'
+	page_size = 5000
+	
 	vector_field = None
-	for doc in tqdm(results.docs, desc="Processing vectors"):
-		# Find the vector field (sim_vector512_l2, sim_vector100_l2, etc.)
-		if vector_field is None:
-			for key in doc.keys():
-				if key.startswith('sim_vector') and key.endswith('_l2'):
-					vector_field = key
-					break
+	
+	pbar = tqdm(total=limit, desc="Downloading vectors")
+	
+	while True:
+		# Check limit
+		if len(vectors) >= limit:
+			break
+			
+		rows_to_fetch = page_size
+		remaining = limit - len(vectors)
+		if remaining < page_size:
+			rows_to_fetch = remaining
+			
+		try:
+			# Cursor pagination requires sort by unique key
+			results = solr.search(query, rows=rows_to_fetch, fl='*,[child]', cursorMark=cursor_mark, sort='id asc')
+		except Exception as e:
+			print(f"Error fetching page: {e}")
+			break
+			
+		if not results.docs:
+			break
+			
+		batch_count = 0
+		for doc in results.docs:
+			# Find the vector field (sim_vector512_l2, sim_vector100_l2, etc.)
+			if vector_field is None:
+				for key in doc.keys():
+					if key.startswith('sim_vector') and key.endswith('_l2'):
+						vector_field = key
+						break
 
-		if vector_field and vector_field in doc:
-			vectors.append(doc[vector_field])
-			# Extract parent sound ID from child doc ID (format: {sound_id}_{similarity_space})
-			child_id = doc['id']
-			sound_id = int(child_id.split('_')[0])
-			sound_ids.append(sound_id)
-			child_docs.append(doc)
+			if vector_field and vector_field in doc:
+				vectors.append(doc[vector_field])
+				# Extract parent sound ID from child doc ID (format: {sound_id}_{similarity_space})
+				child_id = doc['id']
+				# Robust ID parsing
+				try:
+					sound_id = int(child_id.split('_')[0])
+				except:
+					continue # Skip malformed ID
+					
+				sound_ids.append(sound_id)
+				child_docs.append(doc)
+				batch_count += 1
+		
+		pbar.update(batch_count)
+		
+		next_cursor = results.nextCursorMark
+		if cursor_mark == next_cursor:
+			break
+		cursor_mark = next_cursor
+
+	pbar.close()
 
 	if not vectors:
 		raise Exception(f"No vectors found for similarity_space={similarity_space}")
