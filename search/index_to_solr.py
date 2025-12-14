@@ -38,6 +38,12 @@ class SolrIndexer:
 	def commit(self):
 		self.solr.commit()
 
+	def clear_index(self):
+		print("Clearing Solr index (*:*)...")
+		self.solr.delete(q='*:*')
+		self.solr.commit()
+		print("Index cleared.")
+
 def get_available_files(docs_dir=SEARCH_DOCUMENTS_DIR):
 	files = sorted(glob.glob(f"{docs_dir}/*.json"))
 
@@ -79,13 +85,16 @@ def show_status(indexer, files):
 def index_files(indexer, files):
 	for file_info in tqdm(files, desc="Indexing files"):
 		docs = json.load(open(file_info['path']))
-		# Add IDs to child documents (Solr requires all docs to have IDs)
+		# Add IDs to child documents (Solr requires all docs to have IDs) and rename for nested docs
 		for doc in docs:
 			if 'similarity_vectors' in doc:
 				parent_id = doc['id']
 				for child in doc['similarity_vectors']:
 					if 'id' not in child:
 						child['id'] = f"{parent_id}_{child.get('similarity_space', 'vec')}"
+				
+				# Rename to _childDocuments_ so Solr recognizes them as nested documents automatically
+				doc['_childDocuments_'] = doc.pop('similarity_vectors')
 		indexer.index_documents(docs)
 	indexer.commit()
 
@@ -101,6 +110,7 @@ def parse_range(range_str):
 def main():
 	parser = argparse.ArgumentParser(description='Index search documents into Solr')
 	parser.add_argument('--status', action='store_true', help='Show current indexing status')
+	parser.add_argument('--clear', action='store_true', help='Clear the index before processing')
 	parser.add_argument('--index', type=str, metavar='RANGE', help='Index file range (e.g., "10" for 1-10, "5-15" for files 5-15)')
 	parser.add_argument('--index-new', type=int, metavar='N', help='Index next N unindexed files')
 	parser.add_argument('--index-all', action='store_true', help='Index all remaining files')
@@ -109,6 +119,9 @@ def main():
 
 	indexer = SolrIndexer(SOLR_URL)
 	files = get_available_files(SEARCH_DOCUMENTS_DIR)
+
+	if args.clear:
+		indexer.clear_index()
 
 	if args.status:
 		show_status(indexer, files)

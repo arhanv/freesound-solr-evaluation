@@ -253,3 +253,20 @@ class SolrManagementAPI:
         self._make_post(url, data)
         if self.logging_verbose >= 1:
             logger.info(f"Created collection alias {alias} for collection {self.collection}")
+
+    def reload_collection(self):
+        """Reload the collection to clear caches."""
+        # Use the Collections API (admin endpoint for broader compatibility)
+        reload_url = urljoin(self.base_url, "solr/admin/collections")
+        params = {
+            "action": "RELOAD",
+            "name": self.collection
+        }
+        try:
+            resp = requests.get(reload_url, params=params, timeout=self.request_timeout)
+            resp.raise_for_status()
+            if self.logging_verbose >= 1:
+                logger.info(f"Reloaded collection {self.collection}")
+            return True
+        except (RequestException, JSONDecodeError) as e:
+            self._handle_request_exception(e, "reloading collection")
