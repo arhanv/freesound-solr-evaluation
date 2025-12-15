@@ -15,8 +15,8 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
-2. Configure Environment (Optional)
-Set the `SEARCH_DOCUMENTS_DIR` environment variable if your data is not in the default location.
+2. Specify the data directory
+Set the `SEARCH_DOCUMENTS_DIR` environment variable to point to the directory containing the JSONs exported from Freesound.
 ```bash
 export SEARCH_DOCUMENTS_DIR="[wherever the JSONs are stored]"
 ```
@@ -35,12 +35,12 @@ The `index_to_solr.py` script indexes sound metadata and vectors from the config
 
 **Common Operations**
 
-| Goal | Command |
+| Action | Command |
 | :--- | :--- |
-| **Check Progress** | `python search/index_to_solr.py --status` |
-| **Index All** | `python search/index_to_solr.py --index-all` |
-| **Index First N Files** | `python search/index_to_solr.py --index 10` |
-| **Index Next N Files** | `python search/index_to_solr.py --index-new 50` |
+| **Check indexing progress** | `python search/index_to_solr.py --status` |
+| **Index all** | `python search/index_to_solr.py --index-all` |
+| **Index first n files** | `python search/index_to_solr.py --index 10` |
+| **Index next n files** | `python search/index_to_solr.py --index-new 50` |
 
 You can also add `--clear` to wipe the collection before indexing (e.g. `python search/index_to_solr.py --clear --index-all`).
 
