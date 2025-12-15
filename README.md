@@ -15,7 +15,13 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
-2. Start Docker engine and Solr
+2. Configure Environment (Optional)
+Set the `SEARCH_DOCUMENTS_DIR` environment variable if your data is not in the default location.
+```bash
+export SEARCH_DOCUMENTS_DIR="[wherever the JSONs are stored]"
+```
+
+3. Start Docker engine and Solr
 ```
 docker-compose up -d
 ```

@@ -3,7 +3,8 @@ import os
 # Base directory (freesound-solr-evaluation/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SEARCH_DOCUMENTS_DIR = "/Volumes/T7 Shield/Datasets/search_documents_export_100k"
+# Data Directory: Use Env Var or Default
+SEARCH_DOCUMENTS_DIR = os.getenv("SEARCH_DOCUMENTS_DIR", "/Volumes/T7 Shield/Datasets/search_documents_export_100k")
 SOLR_BASE_URL = "http://localhost:8983"
 COLLECTION_NAME = "freesound"
 
