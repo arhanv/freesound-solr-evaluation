@@ -1,3 +1,11 @@
+"""
+Modifications from original Freesound Solr implementation:
+------------------------------------
+- Removed Django dependency: Replaced Django logging and settings with standard Python `logging` and `configs` module.
+- Exception Handling: Catches standard `requests` exceptions instead of Django-specific ones.
+- Configuration: Imports base URL and collection names from a local `configs.py`.
+"""
+
 import requests
 from urllib.parse import urljoin
 import logging
