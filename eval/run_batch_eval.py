@@ -12,7 +12,7 @@ import pysolr
 
 # Add search directory to path to import configs
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from configs import SOLR_URL
+from search.configs import SOLR_URL
 
 
 def run_command(cmd):

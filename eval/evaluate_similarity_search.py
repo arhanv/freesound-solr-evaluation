@@ -13,7 +13,7 @@ import pysolr
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+from search.configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
 
 NUM_SOUNDS_FOR_EVAL = 2000
 N_NEIGHBORS = 50
@@ -127,6 +127,34 @@ def similarity_search_solr(query_vector, similarity_space, k, solr_url=SOLR_URL)
 
     return results, query_time
 
+def calculate_ndcg_weighted(retrieved, ground_truth, k=50):
+    """
+    Calculates NDCG@K using the "true" rank as the relevance score.
+    Items ranked higher by the original embeddings will have higher relevance scores.
+    Essentially, the top item in ground_truth has relevance k, the second k-1, ..., the k-th item has relevance 1.
+
+    Args:
+        retrieved (list): List of retrieved item IDs.
+        ground_truth (list): List of ground truth item IDs.
+        k (int): Number of top items to consider for NDCG calculation.
+    Returns:
+        float: Weighted NDCG@K score.
+    """
+    # Map ground truth items to their relevance scores (k, k-1, k-2... 1)
+    relevance_map = {item: (k - idx) for idx, item in enumerate(ground_truth[:k])}
+
+    # Calculate Actual DCG
+    dcg = 0.0
+    for i, item in enumerate(retrieved[:k]):
+        rel = relevance_map.get(item, 0)
+        if rel > 0:
+            # Formula: rel_i / log2(rank + 1)
+            dcg += rel / np.log2(i + 2)
+    
+    # Calculate Ideal DCG (if the items were returned in perfect 1, 2, 3... order)
+    idcg = sum((k - i) / np.log2(i + 2) for i in range(k))
+    
+    return dcg / idcg if idcg > 0 else 0.0
 
 def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None,
                                similarity_space='laion_clap', k=N_NEIGHBORS, output_dir=None,
@@ -163,6 +191,7 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
     query_times = []
     retrieved_neighbors = []
     recalls = []
+    ndcgs = []
     warmup_times = []
 
     if warmup > 0:
@@ -202,8 +231,12 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
             gt_neighbors = [sid for sid in ground_truth_results[i] if sid != query_sound_id][:k]
             gt_set = set(gt_neighbors)
             retrieved_set = set(neighbors[:k])
+            # Recall Calculation (Set-based)
             recall = len(gt_set & retrieved_set) / k if k > 0 else 0.0
             recalls.append(recall)
+            # NDCG Calculation (Order-sensitive)
+            ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, k)
+            ndcgs.append(ndcg_val)
 
     if empty_result_count > 0:
         print(f"\n\nWarning: {empty_result_count}/{len(target_sound_vecs)} queries returned 0 results")
@@ -220,6 +253,8 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         'qps': 1000 / mean_latency if mean_latency > 0 else 0,
         'recall_mean': np.mean(recalls) if recalls else 0.0,
         'recall_std': np.std(recalls) if recalls else 0.0,
+        'ndcg_mean': np.mean(ndcgs) if ndcgs else 0.0,
+        'ndcg_std': np.std(ndcgs) if ndcgs else 0.0,
         'empty_results': empty_result_count,
         'warmup_mean': warmup_mean,
         'warmup_penalty_pct': warmup_penalty_pct

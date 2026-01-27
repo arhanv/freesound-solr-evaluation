@@ -47,13 +47,13 @@ You can also add `--clear` to wipe the collection before indexing (e.g. `python 
 ## Fitting compact similarity vectors (PCA)
 To reduce the dimensionality of vectors via PCA, we use `search/pca.py`, which fits and saves a PCA matrix to `models/`.
 
-`pca.py` includes a few arguments for process control (you can see the rest using 'python search/pca.py --help'):
+`pca.py` includes a few arguments for process control (you can see the rest using   `python search/pca.py --help`):
 - `--fit`: fit the PCA model
 - `--reindex`: re-index the vectors with the PCA model
 - `--dims`: the number of dimensions to reduce to
 - `--checkpoint`: if the process is interrupted, you can use the checkpoint saved to `models/` to resume
 
-e.g. `python search/pca.py --fit --reindex --dims 128` will fit a PCA model with 128 dimensions and index the reindex Solr to include these new similarity vectors as child documents of the parent sounds.
+e.g. `python search/pca.py --fit --reindex --dims 128` will fit a PCA model with 128 dimensions and reindex Solr to include these new similarity vectors as child documents of the parent sounds.
 
 ## Evaluating Search Performance
 The `eval/` directory contains scripts for evaluating search performance. These can be run after fitting and indexing the compact vectors into Solr.
