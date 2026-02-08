@@ -13,7 +13,7 @@ import pysolr
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from search.configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+from configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
 
 NUM_SOUNDS_FOR_EVAL = 2000
 N_NEIGHBORS = 50

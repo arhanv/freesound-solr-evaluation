@@ -3,6 +3,7 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import normalize
 import pickle
 import matplotlib.pyplot as plt
+import gc
 
 class GMModel:
     """
@@ -33,6 +34,8 @@ class GMModel:
             
             bic = gmm.bic(data)
             bic_scores.append(bic)
+            del gmm
+            gc.collect()
             
             if bic < best_bic:
                 best_bic = bic
@@ -55,10 +58,12 @@ class GMModel:
     def fit(self, data):
         """Fits the internal GMM to the provided data."""
         print(f"Fitting model (k={self.n_components}, cov={self.covariance_type})...")
+        data = np.asanyarray(data, dtype=np.float32) # cast to float32 just in case
         self.model = GaussianMixture(
             n_components=self.n_components,
             covariance_type=self.covariance_type,
             random_state=self.seed,
+            reg_covar=1e-6, # add small regularization
             verbose=1
         )
         self.model.fit(data)
@@ -77,9 +82,9 @@ class GMModel:
         print(f"Distribution model loaded from {filepath}")
         return obj
 
-    def sample(self, n_samples):
+    def sample(self, n_samples, noise_level=0.01):
         """
-        Generates synthetic embeddings.
+        Generates synthetic embeddings with added Gaussian noise.
         
         Returns:
             np.ndarray: Matrix of shape (n_samples, dimensions), L2 normalized.
@@ -89,6 +94,7 @@ class GMModel:
 
         # Sample GMM
         X_sample, _ = self.model.sample(n_samples)
+        X_sample += np.random.normal(0, noise_level, X_sample.shape)
         
         # Apply L2 norm
         X_sample = normalize(X_sample, norm='l2', axis=1)
