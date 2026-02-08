@@ -30,50 +30,94 @@ docker-compose up -d
 python search/setup.py
 ```
 
-## Loading data into solr
-The `index_to_solr.py` script indexes sound metadata and vectors from the configured `SEARCH_DOCUMENTS_DIR`.
+## Loading Data (Indexing)
+The `index_to_solr.py` script indexes sound metadata and vectors from your configured `SEARCH_DOCUMENTS_DIR`.
 
-**Common Operations**
+**Check indexing status:**
+```bash
+python search/index_to_solr.py --status
+```
 
-| Action | Command |
-| :--- | :--- |
-| **Check indexing progress** | `python search/index_to_solr.py --status` |
-| **Index all** | `python search/index_to_solr.py --index-all` |
-| **Index first n files** | `python search/index_to_solr.py --index 10` |
-| **Index next n files** | `python search/index_to_solr.py --index-new 50` |
+**Index all files:**
+```bash
+python search/index_to_solr.py --index-all
+```
 
-You can also add `--clear` to wipe the collection before indexing (e.g. `python search/index_to_solr.py --clear --index-all`).
+**Index a specific number of new files (e.g. 50):**
+```bash
+python search/index_to_solr.py --index-new 50
+```
 
-## Fitting compact similarity vectors (PCA)
-To reduce the dimensionality of vectors via PCA, we use `search/pca.py`, which fits and saves a PCA matrix to `models/`.
+*Note: Add `--clear` to wipe the collection before indexing (e.g. `python search/index_to_solr.py --clear --index-all`).*
 
-`pca.py` includes a few arguments for process control (you can see the rest using   `python search/pca.py --help`):
-- `--fit`: fit the PCA model
-- `--reindex`: re-index the vectors with the PCA model
-- `--dims`: the number of dimensions to reduce to
-- `--checkpoint`: if the process is interrupted, you can use the checkpoint saved to `models/` to resume
+## Dimensionality Reduction (PCA)
+Use `search/pca.py` to train PCA models and re-index vectors with reduced dimensionality.
 
-e.g. `python search/pca.py --fit --reindex --dims 128` will fit a PCA model with 128 dimensions and reindex Solr to include these new similarity vectors as child documents of the parent sounds.
+**Fit model and re-index (Standard Workflow):**
+```bash
+# Fits PCA model and re-indexes vectors to 128 dimensions
+python search/pca.py --fit --reindex --dims 128
+```
+
+**Fit model only:**
+```bash
+python search/pca.py --fit --dims 128
+```
+
+**Resume from checkpoint:**
+```bash
+# Resume if re-indexing was interrupted
+python search/pca.py --reindex --dims 128 --checkpoint models/pca_checkpoint_laion_clap_pca128.json
+```
+
+## Synthetic Data Generation
+To test Solr performance at scales larger than the available dataset, `search/generate_and_index_synthetics.py` generates realistic "fake" embedding vectors using a Gaussian Mixture Model (GMM).
+
+**Fit model and generate data:**
+```bash
+# Fits GMM on existing data and generates 1 million synthetic vectors
+python search/generate_and_index_synthetics.py --fit --find-k --generate 1000000
+```
+You can use `--seed` to specify a random state or `--k` to specify the number of components for the GMM. By default, it will use `find-k` to automatically optimize K using the elbow method and Bayesian Information Criterion (BIC), but by default it tests `k=100` to `k=1000` in steps of 100. With 100k vectors, I found that `k=800` works fairly well.
+
+**Generate more data (using existing model):**
+```bash
+python search/generate_and_index_synthetics.py --generate 500000
+```
+
+<p align="center">
+  <img src="tsne_overlap_results.png" alt="t-SNE Overlap of Real vs Synthetic Data" width="40%">
+</p>
+
+**Cleanup synthetic data:**
+```bash
+python search/generate_and_index_synthetics.py --cleanup
+```
 
 ## Evaluating Search Performance
-The `eval/` directory contains scripts for evaluating search performance. These can be run after fitting and indexing the compact vectors into Solr.
+The `eval/` directory contains scripts for measuring search performance (recall and latency).
 
-### Optional: Individual similarity space evaluation
-`evaluate_similarity_search.py` can be used to evaluate search performance for a specific similarity space. It constructs a set of test queries from the database using `--seed` and `--num-sounds` (or via a `--ground-truth-file` which was generated from a previous run, to reuse the same test queries across different configs). The test queries are then evaluated for recall and latency in similarity search using the vector space specified in `--space`. 
+**Batch Evaluation (Recommended):**
+Evaluates multiple dimensions against a baseline with warmup and cache handling.
+```bash
+python eval/run_batch_eval.py \
+    --seed 100 \
+    --num-sounds 4000 \
+    --source-space laion_clap \
+    --dims 64 128 256 \
+    --warmup 500 \
+    --save-details
+```
 
-If we run this line: `python eval/evaluate_similarity_search.py --space laion_clap --num-sounds 2000 --seed 100 --save-ground-truth`, it will execute the eval loop on the basic CLAP similarity vectors and save the results to `eval/results/{run_name}/ground_truth.pkl` so we can reuse these as the baseline for the compressed vectors. However, you can just use the batch eval script instead, which does all of this automatically.
+**Single Space Evaluation:**
+Evaluates a specific similarity space individually.
+```bash
+# Run eval and save ground truth for future comparisons
+python eval/evaluate_similarity_search.py --space laion_clap --num-sounds 2000 --seed 100 --save-ground-truth
+```
 
-### Recommended: Batch evaluation
-`run_batch_eval.py` can be used to evaluate search performance at once for multiple similarity spaces, with warmup and cache-clearing to ensure fair comparison. You can run it like this:
-
-`python eval/run_batch_eval.py --seed 100 --num-sounds 4000 --source-space laion_clap --dims 64 128 256 384 --warmup 500 --save-details`
-1. Creates a set of test queries with `--seed` and `--num-sounds`.
-2. Runs the eval loop for the `laion_clap` space, and saves the baseline results to `ground_truth`.
-3. For each of the similarity spaces in PCA-{64, 128, 256, 384}, it will evaluate the search performance (using the same query set) against the baseline and save the results to `results.csv`.
-
-**Results:**
-
-Output is saved to `eval/results/` in run-specific directories (e.g., `seed42_queries2000_.../`).
-- `results.csv`: Summary metrics (recall, latency, qps, configs).
+### Results
+Output is saved to `eval/results/{run_name}/`:
+- `results.csv`: Summary metrics (recall, latency, qps).
 - `ground_truth.pkl`: The similarity results returned by original similarity vectors (512-dim).
-- `per_query_results.pkl`: Dataframes containing the query-by-query results. Useful for checking latency performance variations and impact of heaping/caching processes from Solr.
+- `per_query_results.pkl`: Dataframes containing query-by-query results (useful for analyzing latency distribution).
