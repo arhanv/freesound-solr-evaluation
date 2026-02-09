@@ -54,11 +54,16 @@ CLI Usage:
 import argparse
 import glob
 import json
-
+import sys
+import os
 import pysolr
 from tqdm import tqdm
 
-from configs import SOLR_URL, SEARCH_DOCUMENTS_DIR, BATCH_SIZE
+# Add project root to sys.path so 'search' package is found when running script directly
+if __name__ == "__main__" or __name__.startswith("search"):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from search.configs import SOLR_URL, SEARCH_DOCUMENTS_DIR, BATCH_SIZE
 
 
 class SolrIndexer:

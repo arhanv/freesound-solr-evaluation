@@ -31,10 +31,14 @@ from tqdm import tqdm
 import requests
 import json
 
-from pca import load_vectors_from_solr
-from index_to_solr import SolrIndexer
-from configs import SOLR_URL
-from gm_model import GMModel
+# Add project root to sys.path so 'search' package is found when running script directly
+if __name__ == "__main__" or __name__.startswith("search"):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from search.pca import load_vectors_from_solr
+from search.index_to_solr import SolrIndexer
+from search.configs import SOLR_URL
+from search.gm_model import GMModel
 from datetime import datetime
 
 # Starting ID for synthetic data to avoid collision with real Freesound IDs
