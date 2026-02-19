@@ -464,7 +464,6 @@ def reduce_and_reindex(pca_model_path, source_similarity_space, target_similarit
     ensure_solr_field_exists(pca.n_components_)
 
     # Load ALL original vectors into memory to perform PCA transform.
-    # Note: With 500k sounds x 512 dimensions, this requires ~1GB RAM.
     vectors, sound_ids, child_docs = load_vectors_from_solr(source_similarity_space)
 
     print("Transforming vectors...")
