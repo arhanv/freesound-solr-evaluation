@@ -196,7 +196,7 @@ else:
             fig = px.bar(chart_df, y='dims_str', x='recall_mean', orientation='h', color='dims_str',
                          labels={'dims_str': 'Dimensions', 'recall_mean': f'Mean Recall@{metric_k}'}, color_discrete_map=dim_to_color)
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.caption(f"**Recall@{metric_k}**: Proportion of top-{metric_k} ground truth items found in top-{retrieve_n} results. Higher is better.")
             
         with g_tab2:
@@ -204,7 +204,7 @@ else:
             fig = px.bar(chart_df, y='dims_str', x='ndcg_mean', orientation='h', color='dims_str',
                          labels={'dims_str': 'Dimensions', 'ndcg_mean': f'Mean nDCG@{metric_k}'}, color_discrete_map=dim_to_color)
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.caption(f"**Weighted nDCG@{metric_k}**: Ranking quality (weighted top {metric_k} results).")
             st.caption(f"Calculates nDCG@K using the 'true' rank as the relevance score. Items ranked higher by the original embeddings will have higher relevance scores. Essentially, the top item in ground_truth has relevance k, the second k-1, ..., the k-th item has relevance 1.")
 
@@ -213,7 +213,7 @@ else:
             fig = px.bar(chart_df, y='dims_str', x='mean_latency', orientation='h', color='dims_str',
                          labels={'dims_str': 'Dimensions', 'mean_latency': 'Avg Latency (ms)'}, color_discrete_map=dim_to_color)
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.caption("**Latency**: Average search execution time. Lower is better.")
             
         with g_tab4:
@@ -221,7 +221,7 @@ else:
             fig = px.bar(chart_df, y='dims_str', x='qps', orientation='h', color='dims_str',
                          labels={'dims_str': 'Dimensions', 'qps': 'Queries Per Second'}, color_discrete_map=dim_to_color)
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.caption("**QPS**: Throughput. Higher is better.")
 
 # --- Query-by-Query Analysis ---
@@ -251,7 +251,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                 fig_raw.update_traces(marker=dict(size=3))
                 fig_raw.update_yaxes(matches=None)
                 fig_raw.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-                st.plotly_chart(fig_raw, use_container_width=True)
+                st.plotly_chart(fig_raw, width='stretch')
             else:
                 st.markdown("#### Query Latency over Time")
                 fig_raw = px.line(
@@ -260,7 +260,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                     labels={'query_index': 'Query Index', 'latency_ms': 'Latency (ms)', 'label': 'Space'},
                     log_y=use_log, render_mode='webgl', color_discrete_map=color_map
                 )
-                st.plotly_chart(fig_raw, use_container_width=True)
+                st.plotly_chart(fig_raw, width='stretch')
 
             st.divider()
             st.markdown("#### Moving Average (Window=50)")
@@ -272,7 +272,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
             fig_rolling = px.line(pivoted_df.dropna(how='all'), 
                                    labels={'index': 'Query Index', 'value': 'Rolling Latency (ms)', 'variable': 'Space'},
                                    log_y=use_log, color_discrete_map=color_map)
-            st.plotly_chart(fig_rolling, use_container_width=True)
+            st.plotly_chart(fig_rolling, width='stretch')
 
         with q_tab2:
             st.markdown("#### Latency Distribution by Space")
@@ -286,7 +286,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                     y='density:Q',
                     color=alt.Color('label:N', scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values())))
                 ).properties(height=400)
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width='stretch')
             except Exception as e:
                 st.warning(f"Could not render distribution: {e}")
 
@@ -323,7 +323,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                     
                 stats.append(row)
                 
-            st.dataframe(pd.DataFrame(stats), use_container_width=True)
+            st.dataframe(pd.DataFrame(stats), width='stretch')
 
         with q_tab4:
             st.markdown(f"#### Recall@{metric_k} Distribution by Space")
@@ -339,7 +339,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                         y='density:Q',
                         color=alt.Color('label:N', scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values())))
                     ).properties(height=400)
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, width='stretch')
                 else:
                     st.info("Recall data unavailable for this selection.")
             except Exception as e:

@@ -17,9 +17,6 @@ def render_sidebar_health():
     status = health.get('status', 'UNKNOWN')
     ts = health.get('refresh_time', '--:--:--')
     
-    # Debug in sidebar (visible in terminal logs)
-    print(f"UI SIDEBAR: status={status}, ts={ts}")
-    
     # Robust display logic
     if status == 'ONLINE':
         st.sidebar.success(f"🟢 Solr Online")
@@ -31,7 +28,7 @@ def render_sidebar_health():
     # Use a more explicit string for the timestamp
     st.sidebar.caption(f"Last update: {ts}")
     
-    if st.sidebar.button("Refresh Status", key="sidebar_refresh", use_container_width=True, icon=":material/refresh:"):
+    if st.sidebar.button("Refresh Status", key="sidebar_refresh", width='stretch', icon=":material/refresh:"):
         st.rerun()
     
     return health

@@ -83,7 +83,7 @@ if spaces:
             )
         },
         hide_index=True,
-        use_container_width=True
+        width='stretch'
     )
 
     # 2. Vector Count Distribution (Horizontal Grouped Bar)
@@ -101,7 +101,7 @@ if spaces:
     )
     fig_bar.update_layout(height=400 + (len(df_spaces['source_space'].unique()) * 50), showlegend=False)
     fig_bar.update_yaxes(matches=None) # Allow unique labels per facet
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width='stretch')
 
     # 3. Index Size Chart (Bubble chart: Dim vs Size, bubble size = Count)
     st.subheader("Storage Efficiency: Dimensions vs Estimated Index Size")
@@ -116,7 +116,7 @@ if spaces:
         size_max=20,
         template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white"
     )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    st.plotly_chart(fig_scatter, width='stretch')
     st.caption("This uses an estimation of the index size based on the number of vectors and their dimensions.")
 else:
     st.info("No similarity spaces found.")
@@ -126,7 +126,7 @@ st.markdown("### Actions")
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    with st.popover("Clean Up Synthetics", use_container_width=True, icon=":material/layers_clear:"):
+    with st.popover("Clean Up Synthetics", width='stretch', icon=":material/layers_clear:"):
         st.markdown("**Purge all synthetic vectors & parents.**\n\nRemoves everything generated via GMM, including PCA-reduced versions of synthetic data.")
         
         # Calculate impacts
@@ -156,7 +156,7 @@ with c1:
                     st.error(f"Cleanup failed: {e}")
 
 with c2:
-    with st.popover("Optimize Index", use_container_width=True, icon=":material/compress:"):
+    with st.popover("Optimize Index", width='stretch', icon=":material/compress:"):
         st.markdown("**Force Merge Segments.**\n\nRun this after large deletions to reclaim disk space and speed up search.")
         st.warning("This is a heavy operation. Continue?")
         if st.button("Yes, optimize now", key="optimize_now"):
@@ -168,7 +168,7 @@ with c2:
                     st.error(f"Optimization failed: {e}")
 
 with c3:
-    with st.popover("Clear Entire Index", use_container_width=True, icon=":material/delete_forever:", type="primary"):
+    with st.popover("Clear Entire Index", width='stretch', icon=":material/delete_forever:", type="primary"):
         st.markdown("**DANGER: Wipe the entire collection.**\n\nThis will remove all real metadata, all synthetic data, and all similarity spaces.")
         st.error("This action is irreversible.")
         if st.button("Yes, CLEAR EVERYTHING", type="primary", key="clear_all"):

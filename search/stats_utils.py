@@ -9,18 +9,12 @@ def get_solr_health():
         # 1. Ping test
         ping_url = f"{SOLR_URL}/admin/ping"
         resp = requests.get(ping_url, params={'wt': 'json'}, timeout=2)
-        
-        # Log to terminal for debugging
-        print(f"DEBUG: Health check ping to {ping_url} -> {resp.status_code}")
-        
         resp.raise_for_status()
         ping_data = resp.json()
         ping_status = str(ping_data.get('status', 'error')).upper()
         
         # Normalize status (case-insensitive check for Solr "OK")
         status = "ONLINE" if ping_status == "OK" else "UNREACHABLE"
-        if status != "ONLINE":
-             print(f"DEBUG: Ping responded but status was {ping_status}")
         
         # 2. Core status (Size, Version)
         admin_url = f"{SOLR_BASE_URL}/solr/admin/cores"
@@ -64,11 +58,9 @@ def get_solr_health():
         if status == "UNREACHABLE":
             result['error'] = f"Solr responded with status: {ping_status}"
             
-        print(f"DEBUG: Health result -> {status} at {result['refresh_time']}")
         return result
     except requests.exceptions.ConnectionError:
         err_msg = 'Connection refused (Docker down?)'
-        print(f"DEBUG: Health check -> DOWN: {err_msg}")
         return {
             'status': 'DOWN', 
             'error': err_msg,
@@ -76,7 +68,6 @@ def get_solr_health():
         }
     except requests.exceptions.Timeout:
         err_msg = 'Request timed out (Solr slow or hanging?)'
-        print(f"DEBUG: Health check -> UNREACHABLE: {err_msg}")
         return {
             'status': 'UNREACHABLE', 
             'error': err_msg,
@@ -84,7 +75,6 @@ def get_solr_health():
         }
     except Exception as e:
         err_msg = str(e)
-        print(f"DEBUG: Health check -> UNREACHABLE error: {err_msg}")
         return {
             'status': 'UNREACHABLE', 
             'error': err_msg,
