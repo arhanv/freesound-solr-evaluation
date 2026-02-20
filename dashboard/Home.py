@@ -16,9 +16,7 @@ st.set_page_config(
 
 st.title("Freesound Solr Evaluation Dashboard")
 
-st.markdown("""
-### Welcome to the Solr Evaluation Suite
-
+st.info("""
 This dashboard provides tools to monitor and evaluate the similarity search performance of Freesound's Solr backend.
 """)
 

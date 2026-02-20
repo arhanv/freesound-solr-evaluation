@@ -12,9 +12,13 @@ import pandas as pd
 import pysolr
 from tqdm import tqdm
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
-from stats_utils import calculate_space_size_mb
+# Add project root to sys.path so 'search' package is found
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+from search.configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+from search.stats_utils import calculate_space_size_mb
 
 NUM_SOUNDS_FOR_EVAL = 2000
 DEFAULT_RETRIEVE_N = 50
@@ -452,7 +456,7 @@ if __name__ == "__main__":
 
     if args.clear_cache:
         print("Reloading collection to clear cache...")
-        from solrapi import SolrManagementAPI
+        from search.solrapi import SolrManagementAPI
         api = SolrManagementAPI(SOLR_BASE_URL, COLLECTION_NAME)
         api.reload_collection()
         time.sleep(2)

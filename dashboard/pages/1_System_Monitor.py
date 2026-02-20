@@ -1,4 +1,6 @@
 import streamlit as st
+from streamlit_extras.row import row
+from streamlit_extras.floating_button import floating_button
 import time
 import pandas as pd
 import requests
@@ -22,19 +24,10 @@ st.set_page_config(
     layout="centered",
 )
 
+floating_button(label="Refresh", icon=":material/refresh:", on_click=lambda: st.rerun())
+
 st.title("Freesound Solr Monitor")
 
-# Configuration & Actions
-col1, col2 = st.columns([0.15, 0.85], vertical_alignment="center")
-with col1:
-    if st.button("Refresh", use_container_width=True):
-        st.rerun()
-with col2:
-    auto_refresh = st.checkbox("Auto-Refresh (5s)", value=False)
-
-st.divider()
-
-# Main Dashboard
 st.subheader("Status")
 health = get_solr_health()
 st.caption(f"Collection: {health.get('collection', 'Unknown')}")
@@ -43,9 +36,10 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Status", health.get("status", "Unknown"))
 c2.metric("Docs", f"{health.get('num_docs', 0):,}")
 c3.metric("Size", f"{health.get('size_mb', 0)} MB")
+st.divider()
+
 
 # Similarity Spaces & Visualization
-st.divider()
 st.subheader("Similarity Spaces")
 spaces = get_similarity_spaces()
 
@@ -76,7 +70,7 @@ if spaces:
             "name": "Space Name",
             "dimension": "Dimensions",
             "count": "Vector Count",
-            "size_mb": "Size (MB)",
+            "size_mb": "Est. Size (MB)",
             "tags": st.column_config.MultiselectColumn(
                 "Classification",
                 options=["real-data", "synthetic-data", "source-space", "projected-space"],
@@ -105,7 +99,7 @@ if spaces:
     st.plotly_chart(fig_bar, use_container_width=True)
 
     # 3. Index Size Chart (Bubble chart: Dim vs Size, bubble size = Count)
-    st.subheader("Storage Efficiency: Dimensions vs Index Size")
+    st.subheader("Storage Efficiency: Dimensions vs Estimated Index Size")
     fig_scatter = px.scatter(
         df_spaces,
         x="dimension",
@@ -118,6 +112,7 @@ if spaces:
         template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white"
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
+    st.caption("This uses an estimation of the index size based on the number of vectors and their dimensions.")
 else:
     st.info("No similarity spaces found.")
 
@@ -126,7 +121,7 @@ st.markdown("### Actions")
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    with st.popover("Clean Up Synthetic Data", use_container_width=True):
+    with st.popover("Clean Up Synthetics", use_container_width=True, icon=":material/layers_clear:"):
         st.markdown("**Purge all synthetic vectors & parents.**\n\nRemoves everything generated via GMM, including PCA-reduced versions of synthetic data.")
         
         # Calculate impacts
@@ -156,7 +151,19 @@ with c1:
                     st.error(f"Cleanup failed: {e}")
 
 with c2:
-    with st.popover("Clear Entire Index", use_container_width=True):
+    with st.popover("Optimize Index", use_container_width=True, icon=":material/compress:"):
+        st.markdown("**Force Merge Segments.**\n\nRun this after large deletions to reclaim disk space and speed up search.")
+        st.warning("This is a heavy operation. Continue?")
+        if st.button("Yes, optimize now", key="optimize_now"):
+            with st.spinner("Triggering optimization..."):
+                try:
+                    requests.get(f"{SOLR_URL}/update?optimize=true", timeout=10)
+                    st.toast("Optimization triggered!")
+                except Exception as e:
+                    st.error(f"Optimization failed: {e}")
+
+with c3:
+    with st.popover("Clear Entire Index", use_container_width=True, icon=":material/delete_forever:", type="primary"):
         st.markdown("**DANGER: Wipe the entire collection.**\n\nThis will remove all real metadata, all synthetic data, and all similarity spaces.")
         st.error("This action is irreversible.")
         if st.button("Yes, CLEAR EVERYTHING", type="primary", key="clear_all"):
@@ -170,19 +177,9 @@ with c2:
                 except Exception as e:
                     st.error(f"Clear failed: {e}")
 
-with c3:
-    with st.popover("Optimize Index", use_container_width=True):
-        st.markdown("**Force Merge Segments.**\n\nRun this after large deletions to reclaim disk space and speed up search.")
-        st.warning("This is a heavy operation. Continue?")
-        if st.button("Yes, optimize now", key="optimize_now"):
-            with st.spinner("Triggering optimization..."):
-                try:
-                    requests.get(f"{SOLR_URL}/update?optimize=true", timeout=10)
-                    st.toast("Optimization triggered!")
-                except Exception as e:
-                    st.error(f"Optimization failed: {e}")
-
-
+auto_refresh = st.segmented_control(label="Auto Refresh? (5s)",
+    options=["Yes", "No"],
+    default="No", width="stretch")
 if auto_refresh:
     time.sleep(5)
     st.rerun()

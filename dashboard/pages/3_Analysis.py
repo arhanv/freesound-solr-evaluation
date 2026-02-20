@@ -167,10 +167,10 @@ st.space("small")
 st.write(f"**Source Space**: {similarity_space}")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Seed", seed)
-m2.metric("kNN(n=?)", n_neighbors)
+m2.metric("n_neighbors", retrieve_n)
 m3.metric("Test Queries", f"{num_sounds:,}")
 m4.metric("Warmup Queries", f"{warmup_cutoff:,}")
-m5.metric("Index Size", index_size_str)
+m5.metric("Total Index Size", index_size_str)
 
 st.subheader("Summary")
 st.dataframe(results_df[["dims", "mean_latency", "recall_mean", "ndcg_mean", "qps", "space_size_mb"]])
@@ -182,7 +182,7 @@ if results_df is None or results_df.empty:
     st.error("No global results found.")
 else:
     with st.expander("Aggregated Metrics", expanded=False):
-        g_tab1, g_tab2, g_tab3, g_tab4 = st.tabs(["Recall@K", "nDCG", "Latency", "QPS"])
+        g_tab1, g_tab2, g_tab3, g_tab4 = st.tabs(["Recall@K", "Weighted nDCG@K", "Mean Latency", "QPS"])
         
         chart_df = results_df.sort_values('dims', ascending=False)
         chart_df['dims_str'] = chart_df['dims'].astype(str)
@@ -201,7 +201,8 @@ else:
                          labels={'dims_str': 'Dimensions', 'ndcg_mean': f'Mean nDCG@{metric_k}'}, color_discrete_map=dim_to_color)
             fig.update_layout(showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"**Weighted nDCG@{metric_k}**: Ranking quality (weighted top {metric_k} results). Higher is better.")
+            st.caption(f"**Weighted nDCG@{metric_k}**: Ranking quality (weighted top {metric_k} results).")
+            st.caption(f"Calculates nDCG@K using the 'true' rank as the relevance score. Items ranked higher by the original embeddings will have higher relevance scores. Essentially, the top item in ground_truth has relevance k, the second k-1, ..., the k-th item has relevance 1.")
 
         with g_tab3:
             st.markdown("#### Mean Latency (ms) vs Dimensions")
@@ -241,7 +242,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
                     details_df.sort_values(['label', 'query_index']),
                     x='query_index', y='latency_ms', color='label', facet_row='label',
                     labels={'query_index': 'Query Index', 'latency_ms': 'Latency (ms)', 'label': 'Space'},
-                    log_y=use_log, opacity=0.4, height=800, render_mode='webgl', color_discrete_map=color_map
+                    log_y=use_log, opacity=0.8, height=800, render_mode='webgl', color_discrete_map=color_map
                 )
                 fig_raw.update_traces(marker=dict(size=3))
                 fig_raw.update_yaxes(matches=None)
