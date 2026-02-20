@@ -202,7 +202,7 @@ if details_df is not None and not details_df.empty and len(details_df) > 100:
         q_limit = details_df['latency_ms'].quantile(p_filter / 100.0)
         details_df = details_df[details_df['latency_ms'] <= q_limit].copy()
 
-    q_tab1, q_tab2, q_tab3 = st.tabs(["Latency Timeline", "Distribution", "Efficiency Stats"])
+    q_tab1, q_tab2, q_tab3 = st.tabs(["Latency Timeline", "Distribution", "Warmup Stats"])
 
     with q_tab1:
         view_type = st.segmented_control("Plot Style", ["Scatter Plot", "Line Plot"], default="Scatter Plot")
