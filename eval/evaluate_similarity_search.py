@@ -164,7 +164,7 @@ def calculate_ndcg_weighted(retrieved, ground_truth, k=50):
 
 def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None,
                                similarity_space='laion_clap', retrieve_n=DEFAULT_RETRIEVE_N, metric_k=DEFAULT_METRIC_K, output_dir=None,
-                               warmup=0, solr_url=SOLR_URL, seed=42, save_details=False):
+                               warmup=0, solr_url=SOLR_URL, seed=42, save_details=False, dashboard=False):
     """Evaluate similarity search latency and recall.
 
     Args:
@@ -203,17 +203,31 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
 
     if warmup > 0:
         print(f"Running {warmup} warmup queries (sampled from target set)...")
+        if dashboard:
+            print(f"[PHASE] Warmup: {similarity_space}")
         # Sample random indices for warmup to avoid caching effects of a single vector
-        warmup_indices = np.random.choice(len(target_sound_vecs), size=warmup, replace=True)
-        for idx in tqdm(warmup_indices, desc="Warmup"):
+        warmup_indices = np.random.choice(len(target_sound_ids), warmup, replace=False)
+        # Handle dashboard vs CLI progress
+        pbar = tqdm(warmup_indices, desc="Warmup", disable=dashboard)
+        for i, idx in enumerate(pbar):
              _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, retrieve_n, solr_url)
              warmup_times.append(w_time)
+             if dashboard and i % 10 == 0:
+                print(f"[PROGRESS] {int(i / len(warmup_indices) * 100)}")
 
     print(f"Querying Solr with {len(target_sound_vecs)} target sounds...")
 
     empty_result_count = 0
-    for i, query_vec in enumerate(tqdm(target_sound_vecs, desc="Running Solr queries")):
+    total_queries = len(target_sound_vecs)
+    # Main evaluation loop
+    if dashboard:
+        print(f"[PHASE] Querying: {similarity_space}")
+        
+    pbar = tqdm(target_sound_vecs, desc="Running Solr queries", disable=dashboard)
+    for i, query_vec in enumerate(pbar):
         results, query_time = similarity_search_solr(query_vec.tolist(), similarity_space, retrieve_n, solr_url)
+        if dashboard and i % 5 == 0:
+            print(f"[PROGRESS] {int(i / total_queries * 100)}")
 
         # Extract parent sound IDs from child documents (_root_ field points to parent)
         query_sound_id = target_sound_ids[i]
@@ -443,6 +457,7 @@ if __name__ == "__main__":
     parser.add_argument('--clear-cache', action='store_true', help='Reload collection to clear cache before running')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for query selection')
     parser.add_argument('--save-details', action='store_true', help='Save detailed per-query metrics')
+    parser.add_argument('--dashboard', action='store_true', help='Enable machine-readable progress logging')
 
     args = parser.parse_args()
 
@@ -492,7 +507,8 @@ if __name__ == "__main__":
             output_dir=None, # Don't save main metrics here yet
             warmup=args.warmup,
             seed=args.seed,
-            save_details=False
+            save_details=False,
+            dashboard=args.dashboard
         )
         ground_truth = gt_result.retrieved_neighbors
         
@@ -529,5 +545,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         warmup=args.warmup,
         seed=args.seed,
-        save_details=args.save_details
+        save_details=args.save_details,
+        dashboard=args.dashboard
     )

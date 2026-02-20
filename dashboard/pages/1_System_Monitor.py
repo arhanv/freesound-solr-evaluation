@@ -15,27 +15,32 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 from search.configs import SOLR_URL
-from search.stats_utils import get_solr_health, get_content_distribution, get_similarity_spaces
+from search.stats_utils import get_content_distribution, get_similarity_spaces
 from search.generate_and_index_synthetics import cleanup_synthetic, SYNTHETIC_CLEANUP_QUERY
 from search.index_to_solr import SolrIndexer
+from sidebar_utils import render_sidebar_health
 
 st.set_page_config(
     page_title="Freesound Solr Monitor",
     layout="centered",
 )
 
-floating_button(label="Refresh", icon=":material/refresh:", on_click=lambda: st.rerun())
+health = render_sidebar_health()
 
 st.title("Freesound Solr Monitor")
 
 st.subheader("Status")
-health = get_solr_health()
-st.caption(f"Collection: {health.get('collection', 'Unknown')}")
+st.caption(f"Collection: {health.get('collection', 'Unknown')} | Last Refresh: {health.get('refresh_time', '--:--:--')}")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Status", health.get("status", "Unknown"))
+
+status = health.get("status", "UNKNOWN")
+c1.metric("Status", status)
 c2.metric("Docs", f"{health.get('num_docs', 0):,}")
 c3.metric("Size", f"{health.get('size_mb', 0)} MB")
+
+if status != "ONLINE":
+    st.error(f"**Connection Error:** {health.get('error', 'Unknown issue')}")
 st.divider()
 
 

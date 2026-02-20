@@ -58,6 +58,7 @@ if __name__ == "__main__":
     parser.add_argument('--retrieve-n', type=int, default=50, help='Number of neighbors to retrieve from Solr')
     parser.add_argument('--metric-k', type=int, default=50, help='Number of neighbors for recall/nDCG metrics')
     parser.add_argument('--save-details', action='store_true', help='Save per-query metrics')
+    parser.add_argument('--dashboard', action='store_true', help='Direct dashboard logging mode')
     args = parser.parse_args()
 
     # 1. Fetch Index Stats for Naming & Config
@@ -100,11 +101,16 @@ if __name__ == "__main__":
     # 4. Run baseline
     # We pass the output_dir. evaluate_similarity_search.py will handle saving csv and pickling GT.
     gt_filename = "ground_truth.pkl"
+    total_phases = 1 + len(args.dims)
+    current_phase_idx = 1
 
     print(f"\n--Generating queries and ground truth file for {args.source_space}--")
+    if args.dashboard:
+        print(f"[BATCH_PROGRESS] {current_phase_idx}/{total_phases}")
+        print(f"[PHASE] Computing Ground Truth ({args.source_space})")
     
     cmd_gt = (
-        f"python eval/evaluate_similarity_search.py "
+        f"python -u eval/evaluate_similarity_search.py "
         f"--space {args.source_space} "
         f"--ground-truth-space {args.source_space} "
         f"--output-dir {output_dir} "
@@ -117,6 +123,8 @@ if __name__ == "__main__":
     )
     if args.save_details:
         cmd_gt += " --save-details"
+    if args.dashboard:
+        cmd_gt += " --dashboard"
 
     run_command(cmd_gt)
 
@@ -124,11 +132,16 @@ if __name__ == "__main__":
 
     # 5. Run PCA Evaluations
     for dim in args.dims:
+        current_phase_idx += 1
         target_space = f"{args.source_space}_pca{dim}"
         print(f"\n--Evaluating {target_space}--")
 
+        if args.dashboard:
+            print(f"[BATCH_PROGRESS] {current_phase_idx}/{total_phases}")
+            print(f"[PHASE] Evaluating {target_space}")
+
         cmd_eval = (
-            f"python eval/evaluate_similarity_search.py "
+            f"python -u eval/evaluate_similarity_search.py "
             f"--space {target_space} "
             f"--ground-truth-file {gt_file_path} "
             f"--output-dir {output_dir} "
@@ -141,6 +154,8 @@ if __name__ == "__main__":
         )
         if args.save_details:
             cmd_eval += " --save-details"
+        if args.dashboard:
+            cmd_eval += " --dashboard"
 
         run_command(cmd_eval)
 

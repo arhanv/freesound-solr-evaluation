@@ -14,8 +14,11 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 from search.stats_utils import get_similarity_spaces
+from sidebar_utils import render_sidebar_health
 
 st.set_page_config(page_title="Run Evaluation", layout="wide")
+
+render_sidebar_health()
 
 st.title("Run Evaluation Queries")
 
@@ -26,6 +29,14 @@ if "log_lines" not in st.session_state:
     st.session_state.log_lines = []
 if "log_queue" not in st.session_state:
     st.session_state.log_queue = queue.Queue()
+if "eval_current_phase" not in st.session_state:
+    st.session_state.eval_current_phase = "Running..."
+if "eval_current_pct" not in st.session_state:
+    st.session_state.eval_current_pct = 0
+if "eval_batch_pct" not in st.session_state:
+    st.session_state.eval_batch_pct = 0
+if "eval_batch_text" not in st.session_state:
+    st.session_state.eval_batch_text = "Starting..."
 
 # --- Configuration Section ---
 from streamlit_extras.stylable_container import stylable_container
@@ -53,12 +64,13 @@ def config_content():
             "Source Space", 
             options=source_options, 
             index=0,
+            key="eval_source_space",
             help="Select the vector space to evaluate against."
         )
 
     with r1.container():
         # Toggle for Select All
-        all_dims = st.toggle("All available dims", value=True, help="Automatically select all available PCA dimensions.")
+        all_dims = st.toggle("All available dims", value=True, key="eval_all_dims", help="Automatically select all available PCA dimensions.")
 
     with r1.container():
         # Dynamic Dimensions Logic
@@ -77,13 +89,14 @@ def config_content():
             st.info(f"No PCA-reduced spaces found for **{space}**.")
             dims = []
         elif all_dims:
-            st.multiselect("PCA Dimensions", options=dims_options, default=dims_options, disabled=True)
+            st.multiselect("PCA Dimensions", options=dims_options, default=dims_options, disabled=True, key="eval_dims_multiselect_all")
             dims = dims_options
         else:
             dims = st.multiselect(
                 "PCA Dimensions", 
                 options=dims_options, 
                 default=[],
+                key="eval_dims_multiselect",
                 help="Select PCA dimensions to test."
             )
 
@@ -97,6 +110,7 @@ def config_content():
             max_value=100000, 
             value=2000, 
             step=100,
+            key="eval_num_sounds",
             help="Number of query sounds to use for evaluation."
         )
         
@@ -107,6 +121,7 @@ def config_content():
             max_value=5000, 
             value=500, 
             step=50,
+            key="eval_warmup",
             help="Number of queries to run before measuring latency."
         )
 
@@ -119,6 +134,7 @@ def config_content():
             min_value=1, 
             max_value=1000, 
             value=50, 
+            key="eval_retrieve_n",
             help="Number of candidates to retrieve from Solr per query."
         )
 
@@ -128,17 +144,19 @@ def config_content():
             min_value=1, 
             max_value=retrieve_n, 
             value=min(50, retrieve_n), 
+            key="eval_metric_k",
             help="Number of results used to calculate recall metrics. For example, if Top-K=10, Recall@10 represents the percentage of queries for which the correct sound is found within the top 10 retrieved results."
         )
 
     with r3.container():
-        seed = st.number_input("Random Seed", value=42, help="Seed for reproducibility.")
+        seed = st.number_input("Random Seed", value=42, key="eval_seed", help="Seed for reproducibility.")
 
     # Row 4: Save Details
     st.write("") # Spacer
     save_details = st.toggle(
         "Save Query-by-Query Metrics", 
         value=True, 
+        key="eval_save_details",
         help="If checked, saves individual latency and recall metrics for each query. It may be noticably slower depending on the number of queries, but is recommended for detailed analysis. You can still see global/aggregated metrics without it."
     )
     
@@ -181,7 +199,14 @@ def run_evaluation():
     if save_details:
         cmd.append("--save-details")
     
+    # Always use dashboard mode for the UI
+    cmd.append("--dashboard")
+    
     st.session_state.log_lines = [] 
+    st.session_state.eval_current_phase = "Initializing..."
+    st.session_state.eval_current_pct = 0
+    st.session_state.eval_batch_pct = 0
+    st.session_state.eval_batch_text = "Starting..."
     # Re-create queue to ensure it's clean (though thread safety might be tricky if old thread still writing, but subprocess is new)
     st.session_state.log_queue = queue.Queue()
     
@@ -208,53 +233,77 @@ if st.button("Start Evaluation", type="primary", disabled=st.session_state.eval_
     st.rerun()
 
 st.divider()
-st.subheader("Execution Progress")
-
-# Containers for updates
-progress_bar = st.progress(0, text="Ready to start...")
-log_container = st.empty()
-
+# Container for execution status
+status_label = "Ready to start..."
 if st.session_state.eval_process:
-    process = st.session_state.eval_process
+    status_label = "Evaluation in progress..."
+
+with st.status(status_label, expanded=True) as status:
+    # 1. Overall Batch Progress
+    overall_progress = st.progress(0, text="Overall Progress")
+    # 2. Segment/Phase Progress
+    progress_bar = st.progress(0, text="Initializing...")
+    log_area = st.empty()
     
-    # Consume queue
-    while not st.session_state.log_queue.empty():
-        try:
-            line = st.session_state.log_queue.get_nowait()
-            st.session_state.log_lines.append(line)
-        except queue.Empty:
-            break
-            
-    # Check process status
-    retcode = process.poll()
-    
-    if retcode is None:
-        # Running
-        # Try to parse progress from last few lines
-        latest_logs = "".join(st.session_state.log_lines[-5:]) # Check recent lines
+    if st.session_state.eval_process:
+        process = st.session_state.eval_process
         
-        # Look for TQDM pattern:  10%|█ |
-        # Or "Running Solr queries:  15%"
-        match = re.search(r'(\d+)%', latest_logs)
-        if match:
+        # Consume queue
+        while not st.session_state.log_queue.empty():
             try:
-                pct = int(match.group(1))
-                progress_bar.progress(pct, text="Evaluation in progress...")
-            except:
-                pass
-        else:
-             progress_bar.progress(0, text="Evaluation running... (Check logs below)")
+                line = st.session_state.log_queue.get_nowait()
+                st.session_state.log_lines.append(line)
+                
+                # Stateful Parsing: Update state as lines arrive
+                if "[PHASE]" in line:
+                    st.session_state.eval_current_phase = line.replace("[PHASE]", "").strip()
+                
+                if "[BATCH_PROGRESS]" in line:
+                    match = re.search(r'\[BATCH_PROGRESS\]\s+(\d+)/(\d+)', line)
+                    if match:
+                        curr, total = int(match.group(1)), int(match.group(2))
+                        st.session_state.eval_batch_pct = int((curr - 1) / total * 100)
+                        st.session_state.eval_batch_text = f"Evaluating Space {curr} of {total}"
+                
+                match = re.search(r'\[PROGRESS\]\s+(\d+)', line)
+                if match:
+                    st.session_state.eval_current_pct = int(match.group(1))
 
-        time.sleep(0.5)
-        st.rerun()
+            except queue.Empty:
+                break
+                
+        # Check process status
+        retcode = process.poll()
         
+        if retcode is None:
+            # Running
+            status.update(label=f"Current: {st.session_state.eval_current_phase}", state="running")
+            overall_progress.progress(st.session_state.eval_batch_pct, text=st.session_state.eval_batch_text)
+            progress_bar.progress(st.session_state.eval_current_pct, text=f"{st.session_state.eval_current_phase}: {st.session_state.eval_current_pct}%")
+            
+            # Throttled refresh
+            time.sleep(0.3)
+            st.rerun()
+        else:
+            # Completed
+            status.update(label="Batch Evaluation Completed! ✅", state="complete", expanded=False)
+            overall_progress.progress(100, text="All evaluatons finished.")
+            progress_bar.progress(100, text="Done.")
+            st.session_state.eval_process = None
+            st.session_state.log_queue = queue.Queue() 
     else:
-        # Completed
-        progress_bar.progress(100, text="Evaluation Completed! ✅")
-        st.session_state.eval_process = None
-        st.session_state.log_queue = queue.Queue() # garbage collect
+        st.write("Click 'Start Evaluation' above to begin.")
 
-# Display Logs
+# Display Logs (Filtered and tucked in expander)
 full_log = "".join(st.session_state.log_lines)
+# Remove ANSI escape codes
 clean_log = re.sub(r'\x1b\[[0-9;]*m', '', full_log) 
-st.code(clean_log, language="bash", line_numbers=True)
+# Filter out dashboard-specific tags
+filtered_lines = [
+    line for line in clean_log.splitlines() 
+    if not any(tag in line for tag in ["[PROGRESS]", "[PHASE]", "[BATCH_PROGRESS]"])
+]
+filtered_log = "\n".join(filtered_lines)
+
+with st.expander("View full log", expanded=False):
+    st.code(filtered_log, language="bash", line_numbers=True)

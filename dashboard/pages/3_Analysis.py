@@ -15,7 +15,11 @@ root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
+from sidebar_utils import render_sidebar_health
+
 st.set_page_config(page_title="Analysis", layout="wide")
+
+render_sidebar_health()
 
 st.title("Analysis & Visualization")
 

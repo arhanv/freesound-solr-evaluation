@@ -8,11 +8,14 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 import streamlit as st
+from sidebar_utils import render_sidebar_health
 
 st.set_page_config(
     page_title="Freesound Solr Dashboard",
     layout="centered",
 )
+
+render_sidebar_health()
 
 st.title("Freesound Solr Evaluation Dashboard")
 
