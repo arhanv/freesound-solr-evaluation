@@ -14,9 +14,11 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
 from configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+from stats_utils import calculate_space_size_mb
 
 NUM_SOUNDS_FOR_EVAL = 2000
-N_NEIGHBORS = 50
+DEFAULT_RETRIEVE_N = 50
+DEFAULT_METRIC_K = 50
 
 class SearchEvaluationResult:
     """Stores and serializes evaluation results."""
@@ -86,7 +88,7 @@ def similarity_search_solr(query_vector, similarity_space, k, solr_url=SOLR_URL)
     Args:
         query_vector (list): Query vector.
         similarity_space (str): Similarity space name.
-        k (int): Number of neighbors to retrieve.
+        k (int): Number of neighbors to retrieve (retrieve_n).
         solr_url (str): Solr collection URL.
 
     Returns:
@@ -157,7 +159,7 @@ def calculate_ndcg_weighted(retrieved, ground_truth, k=50):
     return dcg / idcg if idcg > 0 else 0.0
 
 def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None,
-                               similarity_space='laion_clap', k=N_NEIGHBORS, output_dir=None,
+                               similarity_space='laion_clap', retrieve_n=DEFAULT_RETRIEVE_N, metric_k=DEFAULT_METRIC_K, output_dir=None,
                                warmup=0, solr_url=SOLR_URL, seed=42, save_details=False):
     """Evaluate similarity search latency and recall.
 
@@ -167,7 +169,8 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         ground_truth_results (list, optional): Ground truth nearest neighbors for recall calculation.
                                                 Each element is a list of ground truth neighbor IDs.
         similarity_space (str): Similarity space to evaluate.
-        k (int): Number of nearest neighbors to retrieve.
+        retrieve_n (int): Number of nearest neighbors to retrieve from Solr.
+        metric_k (int): Number of neighbors to consider for recall/nDCG metrics.
         output_dir (str, optional): Directory to save results (results.csv, detailed metrics).
                                     If None, results are not saved to disk.
         warmup (int): Number of warmup queries before measurement.
@@ -199,14 +202,14 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         # Sample random indices for warmup to avoid caching effects of a single vector
         warmup_indices = np.random.choice(len(target_sound_vecs), size=warmup, replace=True)
         for idx in tqdm(warmup_indices, desc="Warmup"):
-             _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, k, solr_url)
+             _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, retrieve_n, solr_url)
              warmup_times.append(w_time)
 
     print(f"Querying Solr with {len(target_sound_vecs)} target sounds...")
 
     empty_result_count = 0
     for i, query_vec in enumerate(tqdm(target_sound_vecs, desc="Running Solr queries")):
-        results, query_time = similarity_search_solr(query_vec.tolist(), similarity_space, k, solr_url)
+        results, query_time = similarity_search_solr(query_vec.tolist(), similarity_space, retrieve_n, solr_url)
 
         # Extract parent sound IDs from child documents (_root_ field points to parent)
         query_sound_id = target_sound_ids[i]
@@ -216,7 +219,7 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
                 parent_id = int(doc['_root_'])
                 if parent_id != query_sound_id:
                     neighbors.append(parent_id)
-                if len(neighbors) >= k:
+                if len(neighbors) >= max(retrieve_n, metric_k):
                     break
 
         if not neighbors:
@@ -228,14 +231,14 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         retrieved_neighbors.append(neighbors)
 
         if ground_truth_results and i < len(ground_truth_results):
-            gt_neighbors = [sid for sid in ground_truth_results[i] if sid != query_sound_id][:k]
+            gt_neighbors = [sid for sid in ground_truth_results[i] if sid != query_sound_id][:metric_k]
             gt_set = set(gt_neighbors)
-            retrieved_set = set(neighbors[:k])
+            retrieved_set = set(neighbors[:metric_k])
             # Recall Calculation (Set-based)
-            recall = len(gt_set & retrieved_set) / k if k > 0 else 0.0
+            recall = len(gt_set & retrieved_set) / metric_k if metric_k > 0 else 0.0
             recalls.append(recall)
             # NDCG Calculation (Order-sensitive)
-            ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, k)
+            ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, metric_k)
             ndcgs.append(ndcg_val)
 
     if empty_result_count > 0:
@@ -246,15 +249,12 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
     warmup_penalty_pct = ((warmup_mean - mean_latency) / mean_latency * 100) if mean_latency > 0 and warmup_times else 0.0
 
     # Calculate Space Size
-    # We loaded 'target_sound_vecs' which is N vectors.
-    # The total space size should be based on the total count in the index, not just the N queries.
-    # But 'calculate_space_size_mb' expects count and dim.
-    # We can fetch the total count for this space from Solr.
     try:
         count_query = f'content_type:v AND similarity_space:{similarity_space}'
         total_vectors = pysolr.Solr(solr_url).search(count_query, rows=0).hits
         space_size_mb = calculate_space_size_mb(total_vectors, target_sound_vecs.shape[1])
-    except Exception:
+    except Exception as e:
+        print(f"Warning: Failed to calculate space size: {e}")
         space_size_mb = 0.0
 
     performance_metrics = {
@@ -276,7 +276,8 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
     result = SearchEvaluationResult(
         configs={
             'similarity_space': similarity_space,
-            'n_neighbors': k,
+            'retrieve_n': retrieve_n,
+            'metric_k': metric_k,
             'query_size': len(target_sound_ids),
             'index_num_docs': index_size,
             'index_num_sounds': index_num_sounds,
@@ -429,7 +430,9 @@ if __name__ == "__main__":
     parser.add_argument('--ground-truth-file', default=None, help='Load ground truth from pickle file')
     parser.add_argument('--save-ground-truth', default=None, help='Save ground truth to pickle file')
     parser.add_argument('--num-sounds', type=int, default=NUM_SOUNDS_FOR_EVAL, help=f'Number of query sounds (default: {NUM_SOUNDS_FOR_EVAL})')
-    parser.add_argument('--k', type=int, default=N_NEIGHBORS, help=f'Number of neighbors (default: {N_NEIGHBORS})')
+    parser.add_argument('--retrieve-n', type=int, default=DEFAULT_RETRIEVE_N, help=f'Number of neighbors to retrieve from Solr (default: {DEFAULT_RETRIEVE_N})')
+    parser.add_argument('--metric-k', type=int, default=DEFAULT_METRIC_K, help=f'Top K elements to consider for metrics (default: {DEFAULT_METRIC_K})')
+    parser.add_argument('--k', type=int, default=None, help='Legacy: overrides both --retrieve-n and --metric-k if provided.')
     parser.add_argument('--output-dir', default=None, help='Directory to save results (results.csv, details, etc.)')
     parser.add_argument('--results-csv', default='eval/results/eval_results.csv', help='Legacy: CSV file to save results if output-dir is not set')
     parser.add_argument('--warmup', type=int, default=500, help='Number of warmup queries (default: 500)')
@@ -438,6 +441,11 @@ if __name__ == "__main__":
     parser.add_argument('--save-details', action='store_true', help='Save detailed per-query metrics')
 
     args = parser.parse_args()
+
+    # Handle legacy --k flag
+    if args.k is not None:
+        args.retrieve_n = args.k
+        args.metric_k = args.k
 
     # Set random seed
     np.random.seed(args.seed)
@@ -475,7 +483,8 @@ if __name__ == "__main__":
             target_ids,
             ground_truth_results=None,
             similarity_space=args.ground_truth_space,
-            k=args.k,
+            retrieve_n=args.retrieve_n,
+            metric_k=args.metric_k,
             output_dir=None, # Don't save main metrics here yet
             warmup=args.warmup,
             seed=args.seed,
@@ -511,7 +520,8 @@ if __name__ == "__main__":
         target_ids,
         ground_truth_results=ground_truth,
         similarity_space=args.space,
-        k=args.k,
+        retrieve_n=args.retrieve_n,
+        metric_k=args.metric_k,
         output_dir=args.output_dir,
         warmup=args.warmup,
         seed=args.seed,

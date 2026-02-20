@@ -15,7 +15,7 @@ if root_dir not in sys.path:
 
 from search.stats_utils import get_similarity_spaces
 
-st.set_page_config(page_title="Run Evaluation", layout="centered")
+st.set_page_config(page_title="Run Evaluation", layout="wide")
 
 st.title("Run Evaluation Queries")
 
@@ -110,18 +110,39 @@ def config_content():
             help="Number of queries to run before measuring latency."
         )
 
-    with r2.container():
+    # Row 3: Retrieve N, Metric K, Seed
+    r3 = row(3, vertical_align="center")
+    
+    with r3.container():
+        retrieve_n = st.number_input(
+            "# Neighbors for Retrieval", 
+            min_value=1, 
+            max_value=1000, 
+            value=50, 
+            help="Number of candidates to retrieve from Solr per query."
+        )
+
+    with r3.container():
+        metric_k = st.number_input(
+            "Top-K Value for Recall Metrics", 
+            min_value=1, 
+            max_value=retrieve_n, 
+            value=min(50, retrieve_n), 
+            help="Number of results used to calculate recall metrics. For example, if Top-K=10, Recall@10 represents the percentage of queries for which the correct sound is found within the top 10 retrieved results."
+        )
+
+    with r3.container():
         seed = st.number_input("Random Seed", value=42, help="Seed for reproducibility.")
 
-    # Row 3: Save Details
+    # Row 4: Save Details
     st.write("") # Spacer
     save_details = st.toggle(
-        "Save Per-Query Metrics", 
+        "Save Query-by-Query Metrics", 
         value=True, 
-        help="If checked, saves detailed latency histograms and per-query stats for analysis."
+        help="If checked, saves individual latency and recall metrics for each query. It may be noticably slower depending on the number of queries, but is recommended for detailed analysis. You can still see global/aggregated metrics without it."
     )
     
-    return space, dims, num_sounds, warmup, seed, save_details
+    return space, dims, num_sounds, warmup, seed, retrieve_n, metric_k, save_details
 
 with stylable_container(
     key="config_box",
@@ -133,7 +154,7 @@ with stylable_container(
         }
     """,
 ):
-    space, dims, num_sounds, warmup, seed, save_details = config_content()
+    space, dims, num_sounds, warmup, seed, retrieve_n, metric_k, save_details = config_content()
 
 
 # --- Real-time Log Monitoring ---
@@ -152,6 +173,8 @@ def run_evaluation():
         "--num-sounds", str(num_sounds),
         "--dims", *[str(d) for d in dims],
         "--warmup", str(warmup),
+        "--retrieve-n", str(retrieve_n),
+        "--metric-k", str(metric_k),
         "--seed", str(seed),
     ]
     

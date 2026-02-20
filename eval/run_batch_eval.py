@@ -55,6 +55,8 @@ if __name__ == "__main__":
     parser.add_argument('--dims', type=int, nargs='+', default=[128, 256, 384],
                         help='List of PCA dimensions to evaluate')
     parser.add_argument('--warmup', type=int, default=500, help='Number of warmup queries')
+    parser.add_argument('--retrieve-n', type=int, default=50, help='Number of neighbors to retrieve from Solr')
+    parser.add_argument('--metric-k', type=int, default=50, help='Number of neighbors for recall/nDCG metrics')
     parser.add_argument('--save-details', action='store_true', help='Save per-query metrics')
     args = parser.parse_args()
 
@@ -84,6 +86,8 @@ if __name__ == "__main__":
         'source_space': args.source_space,
         'dims': args.dims,
         'warmup': args.warmup,
+        'retrieve_n': args.retrieve_n,
+        'metric_k': args.metric_k,
         'timestamp': timestamp,
         'index_size': index_size,
         'index_size_mb': index_size_mb,
@@ -107,7 +111,9 @@ if __name__ == "__main__":
         f"--seed {args.seed} "
         f"--clear-cache "
         f"--num-sounds {args.num_sounds} "
-        f"--warmup {args.warmup}"
+        f"--warmup {args.warmup} "
+        f"--retrieve-n {args.retrieve_n} "
+        f"--metric-k {args.metric_k}"
     )
     if args.save_details:
         cmd_gt += " --save-details"
@@ -129,7 +135,9 @@ if __name__ == "__main__":
             f"--seed {args.seed} "
             f"--clear-cache "
             f"--num-sounds {args.num_sounds} "
-            f"--warmup {args.warmup}"
+            f"--warmup {args.warmup} "
+            f"--retrieve-n {args.retrieve_n} "
+            f"--metric-k {args.metric_k}"
         )
         if args.save_details:
             cmd_eval += " --save-details"
