@@ -1,0 +1,8 @@
+{
+    "n_components": 64,
+    "n_training_samples": 10000,
+    "source_space": "laion_clap",
+    "explained_variance": 0.9117890000343323,
+    "timestamp": "2026-02-20T15:49:43.867529",
+    "model_filename": "laion_clap_pca64.pkl"
+}

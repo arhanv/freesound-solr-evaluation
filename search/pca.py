@@ -18,6 +18,7 @@ import json
 import os
 import pickle
 import sys
+from datetime import datetime
 
 import numpy as np
 import pysolr
@@ -185,11 +186,45 @@ def load_pca_model(filepath):
         return pickle.load(f)
 
 
+def archive_existing_model(filepath):
+    """Renames an existing model file and its sidecar to include a timestamp."""
+    if not filepath or not os.path.exists(filepath):
+        return
+    
+    timestamp = datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y%m%d-%H%M%S")
+    archive_path = f"{filepath}.{timestamp}.archive"
+    os.rename(filepath, archive_path)
+    print(f"Archived existing model to {archive_path}")
+
+    # Check for metadata sidecar
+    meta_path = filepath.replace('.pkl', '.json')
+    if os.path.exists(meta_path):
+        meta_archive_path = f"{meta_path}.{timestamp}.archive"
+        os.rename(meta_path, meta_archive_path)
+
+
 def fit_and_save_pca(source_space, n_components, output_model_path, max_vectors=None):
     """Orchestrates loading data, fitting PCA, and saving the model."""
     vectors, _, _ = load_vectors_from_solr(source_space, max_vectors=max_vectors)
     pca = fit_pca(vectors, n_components)
+    
+    os.makedirs(os.path.dirname(os.path.abspath(output_model_path)), exist_ok=True)
+    archive_existing_model(output_model_path)
     save_pca_model(pca, output_model_path)
+    
+    # Save sidecar metadata
+    meta_path = output_model_path.replace('.pkl', '.json')
+    with open(meta_path, 'w') as f:
+        json.dump({
+            'n_components': n_components,
+            'n_training_samples': len(vectors),
+            'source_space': source_space,
+            'explained_variance': float(pca.explained_variance_ratio_.sum()),
+            'timestamp': datetime.now().isoformat(),
+            'model_filename': os.path.basename(output_model_path)
+        }, f, indent=4)
+    print(f"Model metadata saved to {meta_path}")
+    
     return pca
 
 
@@ -378,39 +413,60 @@ if __name__ == "__main__":
     parser.add_argument('--fit', action='store_true', help='Fit PCA model')
     parser.add_argument('--reindex', action='store_true', help='Transform and add child documents to Solr')
     parser.add_argument('--cleanup', action='store_true', help='Delete vectors from the target PCA space')
-    parser.add_argument('--dims', type=int, default=128, help='Target dimensions')
+    parser.add_argument('--dims', type=int, nargs='+', default=[128], help='Target dimensions (can provide multiple)')
     parser.add_argument('--source-space', default='laion_clap', help='Source similarity space')
-    parser.add_argument('--target-space', default=None, help='Target similarity space name')
-    parser.add_argument('--model-path', default=None, help='Path to PCA model file')
-    parser.add_argument('--checkpoint', default=None, help='Path to checkpoint file')
+    parser.add_argument('--target-space', default=None, help='Target similarity space name (if single dimension)')
+    parser.add_argument('--model-path', default=None, help='Path to PCA model file (if single dimension)')
+    parser.add_argument('--checkpoint', default=None, help='Path to checkpoint file (if single dimension)')
     parser.add_argument('--batch-size', type=int, default=1000, help='Batch size for indexing')
     parser.add_argument('--cache', action='store_true', help='Cache transformed vectors to disk')
-    parser.add_argument('--cache-path', default=None, help='Path to vector cache file')
+    parser.add_argument('--cache-path', default=None, help='Path to vector cache file (if single dimension)')
 
     args = parser.parse_args()
 
-    if args.model_path is None:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        args.model_path = os.path.join(base_dir, "models", f"pca_{args.dims}.pkl")
-
-    target = args.target_space or f"{args.source_space}_pca{args.dims}"
-
-    if args.cleanup:
-        delete_pca_vectors(target)
-
-    if args.fit:
-        fit_and_save_pca(args.source_space, args.dims, args.model_path)
-
-    if args.reindex:
-        cache_path = None
-        if args.cache:
-            cache_path = args.cache_path or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", f"cache_{target}.pkl")
-
-        if args.checkpoint:
-            ckpt = args.checkpoint
+    pbar = tqdm(args.dims)
+    for dim in pbar:
+        # 1. Determine Target Space Name
+        if len(args.dims) == 1 and args.target_space:
+            target = args.target_space
         else:
-            ckpt = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", f"pca_checkpoint_{target}.txt")
+            target = f"{args.source_space}_pca{dim}"
+            if args.target_space and len(args.dims) > 1:
+                print(f"Warning: Multiple dimensions provided. Ignoring target-space '{args.target_space}' for dim {dim} and using '{target}' instead.")
 
-        reduce_and_reindex(args.model_path, args.source_space, target,
-                           batch_size=args.batch_size, checkpoint_path=ckpt,
-                           cache_path=cache_path)
+        # 2. Determine Model Path
+        if len(args.dims) == 1 and args.model_path:
+            model_path = args.model_path
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            model_path = os.path.join(base_dir, "models", "pca", f"{target}.pkl")
+
+        pbar.set_description(f"Dim: {dim} ({target})")
+
+        if args.cleanup:
+            # Note: delete_pca_vectors has a confirmation prompt
+            delete_pca_vectors(target)
+
+        if args.fit:
+            fit_and_save_pca(args.source_space, dim, model_path)
+
+        if args.reindex:
+            # Determine Cache Path
+            if len(args.dims) == 1 and args.cache_path:
+                cache_p = args.cache_path
+            elif args.cache:
+                cache_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", f"cache_{target}.pkl")
+            else:
+                cache_p = None
+
+            # Determine Checkpoint Path
+            if len(args.dims) == 1 and args.checkpoint:
+                ckpt = args.checkpoint
+            else:
+                ckpt = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", f"pca_checkpoint_{target}.txt")
+
+            reduce_and_reindex(model_path, args.source_space, target,
+                               batch_size=args.batch_size, checkpoint_path=ckpt,
+                               cache_path=cache_p)
+        
+    print("\nAll dimensions processed.")

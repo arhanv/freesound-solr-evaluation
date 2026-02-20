@@ -26,6 +26,8 @@ Examples:
 import argparse
 import os
 import sys
+from datetime import datetime
+from datetime import datetime
 import numpy as np
 from tqdm import tqdm
 import requests
@@ -43,6 +45,7 @@ from datetime import datetime
 
 # Starting ID for synthetic data to avoid collision with real Freesound IDs
 SYNTHETIC_ID_START = 1_000_000_000 
+SYNTHETIC_CLEANUP_QUERY = 'is_synthetic:true OR similarity_space:*_synthetic*'
 
 def generate_and_index(source_space, n_synthetic, gm_model, solr_url=SOLR_URL, batch_size=2000):
     """Generates synthetic vectors and indexes them into Solr in batches.
@@ -118,12 +121,11 @@ def cleanup_synthetic(solr_url=SOLR_URL):
     indexer = SolrIndexer(solr_url)
     print(f"Current count before cleanup: {get_synthetic_count(indexer)}")
     
-    # 1. Delete by the flag (Parents)
-    # 2. Delete by the ID range reserved for synthetics
-    delete_query = f'is_synthetic:true OR id:[{int(SYNTHETIC_ID_START)} TO *]'
+    # 1. Delete parents by the synthetic flag
+    # 2. Delete vectors by the similarity_space suffix
     
-    print(f"Executing deep cleanup with query: {delete_query}")
-    indexer.solr.delete(q=delete_query)
+    print(f"Executing safe cleanup with query: {SYNTHETIC_CLEANUP_QUERY}")
+    indexer.solr.delete(q=SYNTHETIC_CLEANUP_QUERY)
     indexer.commit()
     
     # Request Solr optimization to merge segments and purge deleted docs from disk
@@ -160,6 +162,22 @@ def get_index_size_mb(solr_url):
         print(f"Warning: Could not fetch index size ({e})")
         return 0.0
 
+def archive_existing_model(filepath):
+    """Renames an existing model file and its sidecar to include a timestamp."""
+    if not filepath or not os.path.exists(filepath):
+        return
+    
+    timestamp = datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y%m%d-%H%M%S")
+    archive_path = f"{filepath}.{timestamp}.archive"
+    os.rename(filepath, archive_path)
+    print(f"Archived existing model to {archive_path}")
+
+    # Check for metadata sidecar
+    meta_path = filepath.replace('.pkl', '.json')
+    if os.path.exists(meta_path):
+        meta_archive_path = f"{meta_path}.{timestamp}.archive"
+        os.rename(meta_path, meta_archive_path)
+
 def main():
     parser = argparse.ArgumentParser(description='Generate and Index Synthetic Embeddings via GMM')
     parser.add_argument('--fit', action='store_true', help='Fit a new GMM model')
@@ -170,7 +188,7 @@ def main():
                         help='Number of random samples to use for fitting (defaults to all)')
     
     parser.add_argument('--source-space', default='laion_clap', help='Source similarity space')
-    parser.add_argument('--model-path', default='models/gmm_laion_clap.pkl', help='Path to save/load GMM')
+    parser.add_argument('--model-path', default=None, help='Path to load/save GMM model')
     parser.add_argument('--k', type=int, default=64, help='Number of components (if not running find-k)')
     parser.add_argument('--min-k', type=int, default=100, help='Min K for BIC search')
     parser.add_argument('--max-k', type=int, default=1000, help='Max K for BIC search')
@@ -182,6 +200,10 @@ def main():
     parser.add_argument('--check-size', action='store_true', help='Print current index size (MB)')
     
     args = parser.parse_args()
+    
+    if args.model_path is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        args.model_path = os.path.join(base_dir, "models", "gmm", f"{args.source_space}_gmm.pkl")
     
     np.random.seed(args.seed)
 
@@ -228,6 +250,8 @@ def main():
         if not manager.model:
             manager.fit(vectors)
         
+        os.makedirs(os.path.dirname(os.path.abspath(args.model_path)), exist_ok=True)
+        archive_existing_model(args.model_path)
         manager.save(args.model_path)
         
         # Save metadata

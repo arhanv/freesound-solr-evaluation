@@ -1,5 +1,6 @@
 *.pyc
 *.DS_STORE
 eval/results/*
-models/cache_laion_clap_synthetic_pca128.pkl
-models/pca_checkpoint_laion_clap_synthetic_pca128.txt
+models/archived
+*.archive
+data_flow.md

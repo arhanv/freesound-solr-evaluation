@@ -11,8 +11,11 @@ from datetime import datetime
 import pysolr
 
 # Add search directory to path to import configs
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from configs import SOLR_URL
+# Add project root to sys.path to allow importing from 'search' package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from search.configs import SOLR_URL
+from search.stats_utils import get_solr_health
 
 
 def run_command(cmd):
@@ -55,9 +58,13 @@ if __name__ == "__main__":
     parser.add_argument('--save-details', action='store_true', help='Save per-query metrics')
     args = parser.parse_args()
 
-    # 1. Fetch Index Stats for Naming
+    # 1. Fetch Index Stats for Naming & Config
     index_size = fetch_index_stats()
     index_size_k = int(index_size / 1000)
+    
+    # Get size in MB
+    health = get_solr_health()
+    index_size_mb = health.get('size_mb', 0)
 
     # 2. Generate Run ID and Directory
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
@@ -79,6 +86,7 @@ if __name__ == "__main__":
         'warmup': args.warmup,
         'timestamp': timestamp,
         'index_size': index_size,
+        'index_size_mb': index_size_mb,
         'run_id': run_id
     }
 

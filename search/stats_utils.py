@@ -111,9 +111,7 @@ def get_similarity_spaces():
                 if vec_keys:
                     dim_str = vec_keys[0].replace('sim_vector', '').split('_')[0]
                     dim = int(dim_str)
-                    # Lucene HNSW overhead is approx 2x raw vector size
-                    bytes_per_doc = dim * 4 * 2.0 
-                    est_size_mb = round((count * bytes_per_doc) / (1024 * 1024), 2)
+                    est_size_mb = calculate_space_size_mb(count, dim)
                     
             spaces.append({
                 'name': name,
@@ -121,9 +119,17 @@ def get_similarity_spaces():
                 'dimension': dim,
                 'size_mb': est_size_mb,
                 'avg_size_kb': round((est_size_mb * 1024) / count, 2) if count > 0 else 0,
-                'type': 'Synthetic' if 'synthetic' in name else 'Original'
+                'type': 'Synthetic' if 'synthetic' in name else 'Real'
             })
         return spaces
     except Exception as e:
         print(f"Error fetching spaces: {e}")
         return []
+
+def calculate_space_size_mb(count, dim):
+    """Calculates estimated size of a vector space in MB."""
+    if not isinstance(dim, int) or count <= 0:
+        return 0.0
+    # Lucene HNSW overhead is approx 2x raw vector size (4 bytes/float)
+    bytes_per_doc = dim * 4 * 2.0 
+    return round((count * bytes_per_doc) / (1024 * 1024), 2)

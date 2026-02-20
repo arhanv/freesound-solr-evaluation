@@ -245,19 +245,32 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
     warmup_mean = np.mean(warmup_times) if warmup_times else 0.0
     warmup_penalty_pct = ((warmup_mean - mean_latency) / mean_latency * 100) if mean_latency > 0 and warmup_times else 0.0
 
+    # Calculate Space Size
+    # We loaded 'target_sound_vecs' which is N vectors.
+    # The total space size should be based on the total count in the index, not just the N queries.
+    # But 'calculate_space_size_mb' expects count and dim.
+    # We can fetch the total count for this space from Solr.
+    try:
+        count_query = f'content_type:v AND similarity_space:{similarity_space}'
+        total_vectors = pysolr.Solr(solr_url).search(count_query, rows=0).hits
+        space_size_mb = calculate_space_size_mb(total_vectors, target_sound_vecs.shape[1])
+    except Exception:
+        space_size_mb = 0.0
+
     performance_metrics = {
         'latency_p50': np.percentile(query_times, 50),
         'latency_p95': np.percentile(query_times, 95),
         'latency_p99': np.percentile(query_times, 99),
         'mean_latency': mean_latency,
-        'qps': 1000 / mean_latency if mean_latency > 0 else 0,
+        'qps': 1000.0 / mean_latency if mean_latency > 0 else 0.0,
         'recall_mean': np.mean(recalls) if recalls else 0.0,
         'recall_std': np.std(recalls) if recalls else 0.0,
         'ndcg_mean': np.mean(ndcgs) if ndcgs else 0.0,
         'ndcg_std': np.std(ndcgs) if ndcgs else 0.0,
         'empty_results': empty_result_count,
         'warmup_mean': warmup_mean,
-        'warmup_penalty_pct': warmup_penalty_pct
+        'warmup_penalty_pct': warmup_penalty_pct,
+        'space_size_mb': space_size_mb
     }
 
     result = SearchEvaluationResult(
@@ -327,11 +340,35 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
     print(f"Loading vectors from '{similarity_space}'...")
     query = f'content_type:v AND similarity_space:{similarity_space}'
 
+    results_docs = []
     if specific_sound_ids is not None:
-        # Load all vectors and filter to specific IDs (avoids complex query)
-        results = solr.search(query, rows=100000, fl='*')
+        # Load specific IDs using batching to avoid URL length limits
+        # and to ensure we find exactly the requested IDs
+        batch_size = 500
+        all_ids = list(set(specific_sound_ids)) # Unique IDs
+        
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            # specific_sound_ids are ints, _root_ is string in Solr
+            # Construct boolean OR query for _root_
+            id_query = " OR ".join([str(sid) for sid in batch])
+            fq = f"_root_:({id_query})"
+            
+            try:
+                # We expect at most 'batch_size' results per batch
+                res = solr.search(query, fq=fq, rows=batch_size, fl='*,_root_')
+                results_docs.extend(res.docs)
+            except Exception as e:
+                print(f"Error loading batch {i}-{i+batch_size}: {e}")
+                
+        # Mock a results object with combined docs
+        class MockResults:
+            def __init__(self, docs):
+                self.docs = docs
+        results = MockResults(results_docs)
+            
     else:
-        results = solr.search(query, rows=num_sounds, fl='*')
+        results = solr.search(query, rows=num_sounds, fl='*,_root_')
 
     vectors = []
     sound_ids = []
@@ -348,7 +385,6 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
     if not vector_field:
         raise Exception(f"Could not find vector field for similarity_space={similarity_space}. Available fields: {list(results.docs[0].keys())}")
 
-    # Build lookup if filtering to specific IDs
     specific_ids_set = set(specific_sound_ids) if specific_sound_ids else None
 
     for doc in tqdm(results.docs, desc=f"Loading {similarity_space} vectors"):
@@ -360,7 +396,13 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
                 sound_ids.append(sound_id)
 
     if len(vectors) == 0:
-        raise Exception(f"No vectors found for similarity_space={similarity_space}")
+        # Debugging aid
+        sample_keys = list(results.docs[0].keys()) if results.docs else "None"
+        raise Exception(f"No vectors loaded for {similarity_space}. \n"
+                        f"Found {len(results.docs)} docs, but filtering retained 0. \n"
+                        f"Vector field: {vector_field}. \n"
+                        f"Sample keys: {sample_keys}. \n"
+                        f"Specific IDs provided: {len(specific_ids_set) if specific_ids_set else 'None'}")
 
     # If specific IDs were requested, ensure we maintain the same order
     if specific_sound_ids is not None:
