@@ -18,6 +18,8 @@ import json
 import os
 import pickle
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import numpy as np
@@ -274,15 +276,93 @@ def delete_pca_vectors(target_space, solr_url=SOLR_URL):
         print(f"Cleanup failed: {e}")
 
 
-def add_pca_child_documents(sound_ids, reduced_vectors, original_child_docs, target_similarity_space,
-                        solr_url=SOLR_URL, batch_size=1000, checkpoint_path=None):
-    """Adds PCA-reduced child documents to Solr using an optimized Read-Modify-Write strategy."""
+def _process_batch(chunk_ids, parent_data_map, target_similarity_space, vector_field,
+                   solr_url, checkpoint_path, checkpoint_lock, pbar):
+    """Processes a single batch of parent IDs: fetch, build, and index."""
+    FIELDS_TO_EXCLUDE = ['_version_', 'type_facet', 'username_facet', 'tagfacet', 'created_range',
+                         'timestamp_start', 'timestamp_end']
+    # Each thread gets its own pysolr connection (not thread-safe to share one)
     solr = pysolr.Solr(solr_url, always_commit=False, timeout=300)
+    id_query = " OR ".join(chunk_ids)
 
+    # --- 1. Fetch Parents ---
+    try:
+        results = solr.search(f"content_type:s AND id:({id_query})", rows=len(chunk_ids), fl='*')
+    except Exception as e:
+        print(f"\nError fetching parents for chunk starting at {chunk_ids[0]}: {e}")
+        pbar.update(len(chunk_ids))
+        return
+
+    parent_map = {str(doc['id']): doc for doc in results}
+    for doc in parent_map.values():
+        for field in FIELDS_TO_EXCLUDE:
+            if field in doc:
+                del doc[field]
+
+    # --- 2. Fetch Existing Children ---
+    try:
+        child_results = solr.search(
+            f"content_type:v AND _root_:({' OR '.join(chunk_ids)})",
+            rows=len(chunk_ids) * 20, fl='*')
+    except Exception as e:
+        print(f"\nError fetching children for chunk starting at {chunk_ids[0]}: {e}")
+        pbar.update(len(chunk_ids))
+        return
+
+    parent_children_map = {}
+    for child in child_results:
+        root_id = str(child.get('_root_'))
+        if root_id not in parent_children_map:
+            parent_children_map[root_id] = []
+        if '_version_' in child:
+            del child['_version_']
+        parent_children_map[root_id].append(child)
+
+    # --- 3. Build & Send Updates ---
+    docs_to_index = []
+    for pid in chunk_ids:
+        if pid not in parent_map:
+            continue
+        parent_doc = parent_map[pid]
+        new_data_list = parent_data_map[pid]
+        final_children = [c for c in parent_children_map.get(pid, [])
+                          if c.get('similarity_space') != target_similarity_space]
+        for vec, orig_doc in new_data_list:
+            final_children.append({
+                'id': f"{pid}_{target_similarity_space}",
+                'content_type': 'v',
+                'similarity_space': target_similarity_space,
+                'timestamp_start': orig_doc.get('timestamp_start', 0),
+                'timestamp_end': orig_doc.get('timestamp_end', -1),
+                vector_field: vec.tolist(),
+            })
+        parent_doc['_childDocuments_'] = final_children
+        docs_to_index.append(parent_doc)
+
+    if docs_to_index:
+        try:
+            solr.add(docs_to_index, commitWithin=10000)
+            with checkpoint_lock:
+                save_checkpoint(checkpoint_path, chunk_ids)
+        except Exception as e:
+            print(f"\nError indexing batch starting at {chunk_ids[0]}: {e}")
+
+    pbar.update(len(chunk_ids))
+
+
+def add_pca_child_documents(sound_ids, reduced_vectors, original_child_docs, target_similarity_space,
+                        solr_url=SOLR_URL, batch_size=1000, checkpoint_path=None, max_workers=1):
+    """Adds PCA-reduced child documents to Solr using an optimized Read-Modify-Write strategy.
+    
+    Args:
+        max_workers: Number of parallel threads for batch processing. Default is 1 (serial).
+                     Values >1 parallelise independent Solr fetch+index cycles; useful when
+                     Solr round-trip latency dominates. Each thread uses its own connection.
+    """
     print("Grouping data by parent ID...")
-    parent_data_map = {} 
-    for sid, vec, orig_doc in tqdm(zip(sound_ids, reduced_vectors, original_child_docs), 
-                                  total=len(sound_ids), desc="Grouping by parent"):
+    parent_data_map = {}
+    for sid, vec, orig_doc in tqdm(zip(sound_ids, reduced_vectors, original_child_docs),
+                                   total=len(sound_ids), desc="Grouping by parent"):
         sid_str = str(sid)
         if sid_str not in parent_data_map:
             parent_data_map[sid_str] = []
@@ -297,82 +377,51 @@ def add_pca_child_documents(sound_ids, reduced_vectors, original_child_docs, tar
     if not parents_to_process:
         print("All parents processed!")
         if checkpoint_path and os.path.exists(checkpoint_path):
-            try: os.remove(checkpoint_path)
-            except Exception: pass
+            try:
+                os.remove(checkpoint_path)
+            except Exception:
+                pass
         return
-
-    n_dims = reduced_vectors.shape[1]
-    vector_field = f"sim_vector{n_dims}_l2"
-    FIELDS_TO_EXCLUDE = ['_version_', 'type_facet', 'username_facet', 'tagfacet', 'created_range', 'timestamp_start', 'timestamp_end']
 
     if batch_size > 1000:
         batch_size = 1000
 
-    for i in tqdm(range(0, len(parents_to_process), batch_size), desc="Processing & Indexing"):
-        chunk_ids = parents_to_process[i:i + batch_size]
-        id_query = " OR ".join(chunk_ids)
-        
-        # --- 1. Fetch Parents ---
-        try:
-            results = solr.search(f"content_type:s AND id:({id_query})", rows=len(chunk_ids), fl='*')
-        except Exception as e:
-            print(f"\nError fetching parents for chunk {i}: {e}"); continue
+    n_dims = reduced_vectors.shape[1]
+    vector_field = f"sim_vector{n_dims}_l2"
+    checkpoint_lock = threading.Lock()
 
-        parent_map = {str(doc['id']): doc for doc in results}
-        for doc in parent_map.values():
-            for field in FIELDS_TO_EXCLUDE:
-                if field in doc: del doc[field]
+    batches = [parents_to_process[i:i + batch_size]
+               for i in range(0, len(parents_to_process), batch_size)]
 
-        # --- 2. Fetch Existing Children ---
-        try:
-            child_results = solr.search(f"content_type:v AND _root_:({' OR '.join(chunk_ids)})", 
-                                        rows=len(chunk_ids) * 20, fl='*')
-        except Exception as e:
-            print(f"\nError fetching children for chunk {i}: {e}"); continue
+    effective_workers = min(max_workers, len(batches))
+    if effective_workers > 1:
+        print(f"Using {effective_workers} parallel workers for {len(batches)} batches.")
 
-        parent_children_map = {}
-        for child in child_results:
-            root_id = str(child.get('_root_'))
-            if root_id not in parent_children_map: parent_children_map[root_id] = []
-            if '_version_' in child: del child['_version_']
-            parent_children_map[root_id].append(child)
-
-        # --- 3. Build & Send Updates ---
-        docs_to_index = []
-        for pid in chunk_ids:
-            if pid not in parent_map: continue
-            parent_doc = parent_map[pid]
-            new_data_list = parent_data_map[pid]
-
-            # Replace old version of this PCA space if it exists
-            final_children = [c for c in parent_children_map.get(pid, []) if c.get('similarity_space') != target_similarity_space]
-
-            for vec, orig_doc in new_data_list:
-                final_children.append({
-                    'id': f"{pid}_{target_similarity_space}",
-                    'content_type': 'v',
-                    'similarity_space': target_similarity_space,
-                    'timestamp_start': orig_doc.get('timestamp_start', 0),
-                    'timestamp_end': orig_doc.get('timestamp_end', -1),
-                    vector_field: vec.tolist(),
-                })
-            parent_doc['_childDocuments_'] = final_children
-            docs_to_index.append(parent_doc)
-
-        if docs_to_index:
-            try:
-                solr.add(docs_to_index, commitWithin=10000)
-                save_checkpoint(checkpoint_path, chunk_ids)
-            except Exception as e: print(f"\nError indexing batch: {e}")
+    with tqdm(total=len(parents_to_process), desc="Processing & Indexing") as pbar:
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            futures = [
+                executor.submit(
+                    _process_batch,
+                    chunk_ids, parent_data_map, target_similarity_space, vector_field,
+                    solr_url, checkpoint_path, checkpoint_lock, pbar
+                )
+                for chunk_ids in batches
+            ]
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc:
+                    print(f"\nBatch raised an exception: {exc}")
 
     print("Processing complete.")
     if checkpoint_path and os.path.exists(checkpoint_path):
-        try: os.remove(checkpoint_path)
-        except Exception: pass
+        try:
+            os.remove(checkpoint_path)
+        except Exception:
+            pass
 
 
 def reduce_and_reindex(pca_model_path, source_similarity_space, target_similarity_space, normalize_output=True,
-                       batch_size=1000, checkpoint_path=None, cache_path=None):
+                       batch_size=1000, checkpoint_path=None, cache_path=None, max_workers=1):
     """Executes the full pipeline with optional vector caching."""
     pca = load_pca_model(pca_model_path)
     ensure_solr_field_exists(pca.n_components_)
@@ -405,7 +454,7 @@ def reduce_and_reindex(pca_model_path, source_similarity_space, target_similarit
             except Exception as e: print(f"Warning: Failed to save cache: {e}")
 
     add_pca_child_documents(sound_ids, reduced, child_docs, target_similarity_space, batch_size=batch_size,
-                            checkpoint_path=checkpoint_path)
+                            checkpoint_path=checkpoint_path, max_workers=max_workers)
 
 
 if __name__ == "__main__":
@@ -419,6 +468,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-path', default=None, help='Path to PCA model file (if single dimension)')
     parser.add_argument('--checkpoint', default=None, help='Path to checkpoint file (if single dimension)')
     parser.add_argument('--batch-size', type=int, default=1000, help='Batch size for indexing')
+    parser.add_argument('--workers', type=int, default=1, help='Number of parallel worker threads for batch indexing (default: 1)')
     parser.add_argument('--cache', action='store_true', help='Cache transformed vectors to disk')
     parser.add_argument('--cache-path', default=None, help='Path to vector cache file (if single dimension)')
 
@@ -467,6 +517,6 @@ if __name__ == "__main__":
 
             reduce_and_reindex(model_path, args.source_space, target,
                                batch_size=args.batch_size, checkpoint_path=ckpt,
-                               cache_path=cache_p)
+                               cache_path=cache_p, max_workers=args.workers)
         
     print("\nAll dimensions processed.")

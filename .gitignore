@@ -2,5 +2,7 @@
 *.DS_STORE
 eval/results/*
 models/archived
+models/pca/*
+models/gmm/*
 *.archive
 data_flow.md

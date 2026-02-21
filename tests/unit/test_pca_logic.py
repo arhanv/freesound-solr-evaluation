@@ -1,8 +1,9 @@
 import pytest
+import threading
 import numpy as np
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from search.pca import load_vectors_from_solr, add_pca_child_documents
+from search.pca import load_vectors_from_solr, add_pca_child_documents, save_checkpoint
 
 class MockSolrResults:
     def __init__(self, docs, nextCursorMark=None, hits=None):
@@ -104,3 +105,77 @@ def test_add_pca_surgical_replacement(mocker):
     assert new_pca_child["id"] == "100_pca_test"
     assert "sim_vector2_l2" in new_pca_child
     assert new_pca_child["sim_vector2_l2"] == [0.5, 0.5]
+
+
+def test_checkpoint_thread_safety(tmp_path):
+    """
+    #2: Proves save_checkpoint is safe under concurrent writes sharing a Lock.
+    50 threads each append 100 unique IDs; the result must contain exactly 5,000
+    unique lines with no corruption or data loss.
+    """
+    checkpoint_file = tmp_path / "chkpt.txt"
+    lock = threading.Lock()
+    n_threads, ids_per_thread = 50, 100
+
+    def write_ids(thread_idx):
+        ids = [f"id_{thread_idx}_{j}" for j in range(ids_per_thread)]
+        with lock:
+            save_checkpoint(str(checkpoint_file), ids)
+
+    threads = [threading.Thread(target=write_ids, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    with open(checkpoint_file) as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    assert len(lines) == n_threads * ids_per_thread, "Some writes were lost"
+    assert len(set(lines)) == n_threads * ids_per_thread, "Duplicate or corrupted entries detected"
+
+
+def test_pipeline_resumability(mocker, tmp_path):
+    """
+    #4: Confirms that IDs already present in the checkpoint file are skipped.
+    Pre-fill the checkpoint with the first 6 of 10 parent IDs; assert that Solr
+    I/O is only triggered for the remaining 4.
+    """
+    checkpoint_file = tmp_path / "chkpt.txt"
+    all_ids = [str(i) for i in range(10)]
+    already_done = set(all_ids[:6])
+    remaining = sorted(all_ids[6:])  # ["6", "7", "8", "9"]
+
+    # Pre-fill checkpoint
+    checkpoint_file.write_text("\n".join(already_done) + "\n")
+
+    reduced_vectors = np.ones((10, 2), dtype=np.float32)
+    original_child_docs = [{"timestamp_start": 0, "timestamp_end": -1}] * 10
+
+    def mock_search(query, **kwargs):
+        if "content_type:s" in query:
+            # Return only the remaining parents (simulating Solr finding them)
+            return [{"id": pid, "content_type": "s"} for pid in remaining if pid in query]
+        return []  # No existing children
+
+    m_solr = MagicMock()
+    m_solr.search.side_effect = mock_search
+    mocker.patch("search.pca.pysolr.Solr", return_value=m_solr)
+
+    add_pca_child_documents(
+        all_ids, reduced_vectors, original_child_docs, "pca_test",
+        batch_size=10, checkpoint_path=str(checkpoint_file)
+    )
+
+    # Exactly one parent-fetch query and one child-fetch query should have been made
+    assert m_solr.search.call_count == 2, "Expected exactly 2 Solr queries for 1 remaining batch"
+
+    # Extract the actual query string (first positional arg) to avoid repr substring false-positives
+    parent_query_str = m_solr.search.call_args_list[0].args[0]
+    assert "content_type:s" in parent_query_str
+    for done_id in already_done:
+        # Wrap in word-boundary markers to avoid '4' matching '14', '40', etc.
+        assert f" {done_id} " not in f" {parent_query_str} ", \
+            f"Already-done ID {done_id!r} appeared in query"
+    for rid in remaining:
+        assert rid in parent_query_str, f"Remaining ID {rid!r} missing from query"
