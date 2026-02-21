@@ -47,6 +47,7 @@ def fetch_index_stats(solr_url=SOLR_URL):
         return 0
 
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Batch run evaluations')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
@@ -59,10 +60,11 @@ if __name__ == "__main__":
     parser.add_argument('--metric-k', type=int, default=50, help='Number of neighbors for recall/nDCG metrics')
     parser.add_argument('--save-details', action='store_true', help='Save per-query metrics')
     parser.add_argument('--dashboard', action='store_true', help='Direct dashboard logging mode')
+    parser.add_argument('--solr-url', type=str, default=SOLR_URL, help='Solr collection URL')
     args = parser.parse_args()
 
     # 1. Fetch Index Stats for Naming & Config
-    index_size = fetch_index_stats()
+    index_size = fetch_index_stats(args.solr_url)
     index_size_k = int(index_size / 1000)
     
     # Get size in MB
@@ -119,7 +121,8 @@ if __name__ == "__main__":
         f"--num-sounds {args.num_sounds} "
         f"--warmup {args.warmup} "
         f"--retrieve-n {args.retrieve_n} "
-        f"--metric-k {args.metric_k}"
+        f"--metric-k {args.metric_k} "
+        f"--solr-url {args.solr_url}"
     )
     if args.save_details:
         cmd_gt += " --save-details"
@@ -150,7 +153,8 @@ if __name__ == "__main__":
             f"--num-sounds {args.num_sounds} "
             f"--warmup {args.warmup} "
             f"--retrieve-n {args.retrieve_n} "
-            f"--metric-k {args.metric_k}"
+            f"--metric-k {args.metric_k} "
+            f"--solr-url {args.solr_url}"
         )
         if args.save_details:
             cmd_eval += " --save-details"

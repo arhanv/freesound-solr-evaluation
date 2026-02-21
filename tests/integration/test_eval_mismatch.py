@@ -3,7 +3,6 @@ import numpy as np
 
 from eval.evaluate_similarity_search import evaluate_similarity_search, load_target_sounds
 
-@pytest.mark.xfail(reason="Expected to fail due to bug in target_ids misalignment when spaces have different sizes")
 def test_evaluation_space_size_mismatch(solr_test_collection, solr_test_client):
     """
     Test scenario where the source space has more vectors than the PCA target space.
@@ -15,15 +14,26 @@ def test_evaluation_space_size_mismatch(solr_test_collection, solr_test_client):
     # Space "large_source": has all 3 vectors
     # Space "small_target": only has vectors for 10 and 30 (20 is missing)
     docs = [
-        {"id": "10", "content_type": "s"},
-        {"id": "20", "content_type": "s"},
-        {"id": "30", "content_type": "s"},
-        {"id": "10_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.1]*128, "_root_": "10"},
-        {"id": "20_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.2]*128, "_root_": "20"},
-        {"id": "30_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.3]*128, "_root_": "30"},
-        
-        {"id": "10_small", "content_type": "v", "similarity_space": "small_target", "sim_vector128_l2": [0.1]*128, "_root_": "10"},
-        {"id": "30_small", "content_type": "v", "similarity_space": "small_target", "sim_vector128_l2": [0.3]*128, "_root_": "30"},
+        {
+            "id": "10", "content_type": "s",
+            "_childDocuments_": [
+                {"id": "10_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.1]*128},
+                {"id": "10_small", "content_type": "v", "similarity_space": "small_target", "sim_vector128_l2": [0.1]*128}
+            ]
+        },
+        {
+            "id": "20", "content_type": "s",
+            "_childDocuments_": [
+                {"id": "20_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.2]*128}
+            ]
+        },
+        {
+            "id": "30", "content_type": "s",
+            "_childDocuments_": [
+                {"id": "30_large", "content_type": "v", "similarity_space": "large_source", "sim_vector128_l2": [0.3]*128},
+                {"id": "30_small", "content_type": "v", "similarity_space": "small_target", "sim_vector128_l2": [0.3]*128}
+            ]
+        }
     ]
     solr_test_client.add(docs, commitWithin=1000)
     solr_test_client.commit()

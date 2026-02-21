@@ -215,6 +215,18 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
              if dashboard and i % 10 == 0:
                 print(f"[PROGRESS] {int(i / len(warmup_indices) * 100)}")
 
+    # Construct Ground Truth Mapping to protect against size mismatches
+    gt_map = {}
+    if ground_truth_results:
+        # We assume the incoming target_sound_ids match the ground truth list length exactly
+        if len(ground_truth_results) != len(target_sound_ids):
+            print(f"Warning: Discrepancy between ground_truth array size ({len(ground_truth_results)}) and target ID array size ({len(target_sound_ids)}). This may cause missing metric evaluations.")
+        
+        # Create dictionary map: ID -> ground_truth_array
+        # Use zip to safely pair them up to the length of the shortest array
+        for sid, gt in zip(target_sound_ids, ground_truth_results):
+            gt_map[sid] = gt
+
     print(f"Querying Solr with {len(target_sound_vecs)} target sounds...")
 
     empty_result_count = 0
@@ -248,16 +260,22 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         query_times.append(query_time)
         retrieved_neighbors.append(neighbors)
 
-        if ground_truth_results and i < len(ground_truth_results):
-            gt_neighbors = [sid for sid in ground_truth_results[i] if sid != query_sound_id][:metric_k]
-            gt_set = set(gt_neighbors)
-            retrieved_set = set(neighbors[:metric_k])
-            # Recall Calculation (Set-based)
-            recall = len(gt_set & retrieved_set) / metric_k if metric_k > 0 else 0.0
-            recalls.append(recall)
-            # NDCG Calculation (Order-sensitive)
-            ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, metric_k)
-            ndcgs.append(ndcg_val)
+        if ground_truth_results:
+            # Safely fetch ground truth for this specific parent ID
+            raw_gt_neighbors = gt_map.get(query_sound_id)
+            if raw_gt_neighbors is not None:
+                gt_neighbors = [sid for sid in raw_gt_neighbors if sid != query_sound_id][:metric_k]
+                gt_set = set(gt_neighbors)
+                retrieved_set = set(neighbors[:metric_k])
+                # Recall Calculation (Set-based)
+                recall = len(gt_set & retrieved_set) / metric_k if metric_k > 0 else 0.0
+                recalls.append(recall)
+                # NDCG Calculation (Order-sensitive)
+                ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, metric_k)
+                ndcgs.append(ndcg_val)
+            else:
+                # This vector wasn't in the ground truth pool, skip metrics silently
+                pass
 
     if empty_result_count > 0:
         print(f"\n\nWarning: {empty_result_count}/{len(target_sound_vecs)} queries returned 0 results")
@@ -458,6 +476,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42, help='Random seed for query selection')
     parser.add_argument('--save-details', action='store_true', help='Save detailed per-query metrics')
     parser.add_argument('--dashboard', action='store_true', help='Enable machine-readable progress logging')
+    parser.add_argument('--solr-url', type=str, default=SOLR_URL, help='Solr collection URL (defaults to configs.SOLR_URL)')
 
     args = parser.parse_args()
 
@@ -470,11 +489,11 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
 
     if args.clear_cache:
-        print("Reloading collection to clear cache...")
-        from search.solrapi import SolrManagementAPI
-        api = SolrManagementAPI(SOLR_BASE_URL, COLLECTION_NAME)
-        api.reload_collection()
-        time.sleep(2)
+        print("Forcing Solr commit to invalidate caches...")
+        import pysolr
+        solr = pysolr.Solr(args.solr_url)
+        solr.commit()
+        time.sleep(1)
 
     # Ensure output directory exists if specified
     if args.output_dir and not os.path.exists(args.output_dir):
@@ -490,7 +509,7 @@ if __name__ == "__main__":
         target_ids = gt_result.target_sound_ids
     elif args.ground_truth_space:
         print(f"Computing ground truth from '{args.ground_truth_space}'...")
-        gt_vecs, target_ids = load_target_sounds(args.ground_truth_space, args.num_sounds)
+        gt_vecs, target_ids = load_target_sounds(args.ground_truth_space, args.num_sounds, solr_url=args.solr_url)
         
         # If calculating ground truth, we can also save it if output_dir is provided
         gt_save_path = args.save_ground_truth
@@ -506,6 +525,7 @@ if __name__ == "__main__":
             metric_k=args.metric_k,
             output_dir=None, # Don't save main metrics here yet
             warmup=args.warmup,
+            solr_url=args.solr_url,
             seed=args.seed,
             save_details=False,
             dashboard=args.dashboard
@@ -519,7 +539,8 @@ if __name__ == "__main__":
     target_vecs, target_ids = load_target_sounds(
         args.space,
         args.num_sounds,
-        specific_sound_ids=target_ids
+        specific_sound_ids=target_ids,
+        solr_url=args.solr_url
     )
 
     # Determine the results CSV path for legacy saving if output_dir is not used
@@ -544,6 +565,7 @@ if __name__ == "__main__":
         metric_k=args.metric_k,
         output_dir=args.output_dir,
         warmup=args.warmup,
+        solr_url=args.solr_url,
         seed=args.seed,
         save_details=args.save_details,
         dashboard=args.dashboard
