@@ -155,7 +155,22 @@ def load_vectors_from_solr(similarity_space, solr_url=SOLR_URL, max_vectors=None
     pbar.close()
     session.close() # Clean up session
     if not vectors: raise Exception(f"No vectors found for similarity_space={similarity_space}")
-    return np.array(vectors, dtype=np.float32), sound_ids, child_docs
+    
+    # Calculate metadata
+    import hashlib
+    sorted_ids = sorted([str(sid) for sid in sound_ids])
+    fingerprint = hashlib.sha1(",".join(sorted_ids).encode('utf-8')).hexdigest()[:8]
+    
+    metadata = {
+        'total_corpus_size': total_hits,
+        'parent_id_range': {
+            'min': sorted_ids[0] if sorted_ids else None,
+            'max': sorted_ids[-1] if sorted_ids else None
+        },
+        'dataset_fingerprint': fingerprint
+    }
+    
+    return np.array(vectors, dtype=np.float32), sound_ids, child_docs, metadata
 
 
 def fit_pca(vectors, n_components):
@@ -207,7 +222,7 @@ def archive_existing_model(filepath):
 
 def fit_and_save_pca(source_space, n_components, output_model_path, max_vectors=None):
     """Orchestrates loading data, fitting PCA, and saving the model."""
-    vectors, _, _ = load_vectors_from_solr(source_space, max_vectors=max_vectors)
+    vectors, _, _, metadata = load_vectors_from_solr(source_space, max_vectors=max_vectors)
     pca = fit_pca(vectors, n_components)
     
     os.makedirs(os.path.dirname(os.path.abspath(output_model_path)), exist_ok=True)
@@ -216,15 +231,18 @@ def fit_and_save_pca(source_space, n_components, output_model_path, max_vectors=
     
     # Save sidecar metadata
     meta_path = output_model_path.replace('.pkl', '.json')
+    meta_dict = {
+        'n_components': n_components,
+        'n_training_samples': len(vectors),
+        'source_space': source_space,
+        **metadata,
+        'explained_variance': float(pca.explained_variance_ratio_.sum()),
+        'timestamp': datetime.now().isoformat(),
+        'model_filename': os.path.basename(output_model_path)
+    }
+    
     with open(meta_path, 'w') as f:
-        json.dump({
-            'n_components': n_components,
-            'n_training_samples': len(vectors),
-            'source_space': source_space,
-            'explained_variance': float(pca.explained_variance_ratio_.sum()),
-            'timestamp': datetime.now().isoformat(),
-            'model_filename': os.path.basename(output_model_path)
-        }, f, indent=4)
+        json.dump(meta_dict, f, indent=4)
     print(f"Model metadata saved to {meta_path}")
     
     return pca
@@ -441,7 +459,7 @@ def reduce_and_reindex(pca_model_path, source_similarity_space, target_similarit
             print(f"Warning: Failed to load cache: {e}. Falling back to Solr download.")
 
     if not loaded_from_cache:
-        vectors, sound_ids, child_docs = load_vectors_from_solr(source_similarity_space)
+        vectors, sound_ids, child_docs, _ = load_vectors_from_solr(source_similarity_space)
         print("Transforming vectors...")
         reduced = transform_vectors(pca, vectors, normalize_output)
 

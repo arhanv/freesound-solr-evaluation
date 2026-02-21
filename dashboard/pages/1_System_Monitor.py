@@ -35,9 +35,34 @@ st.caption(f"Collection: {health.get('collection', 'Unknown')} | Last Refresh: {
 c1, c2, c3 = st.columns(3)
 
 status = health.get("status", "UNKNOWN")
-c1.metric("Status", status)
-c2.metric("Docs", f"{health.get('num_docs', 0):,}")
-c3.metric("Size", f"{health.get('size_mb', 0)} MB")
+if status == "ONLINE":
+    d_val = "● Solr is running"
+    d_color = "normal"   # Green
+elif status == "UNKNOWN":
+    d_color = "off"      # Gray/Yellow-ish (Streamlit's 'off' is neutral)
+    d_val = "○ Unable to reach Solr"
+else: # DOWN
+    d_val = "● Check if Docker is running"
+    d_color = "inverse"  # Red
+
+current_docs = health.get('num_docs', 0)
+current_size = health.get('size_mb', 0)
+
+if 'prev_num_docs' not in st.session_state:
+    st.session_state['prev_num_docs'] = current_docs
+if 'prev_size_mb' not in st.session_state:
+    st.session_state['prev_size_mb'] = current_size
+
+delta_docs = current_docs - st.session_state['prev_num_docs']
+delta_size = current_size - st.session_state['prev_size_mb']
+
+# Update session state for the next run
+st.session_state['prev_num_docs'] = current_docs
+st.session_state['prev_size_mb'] = current_size
+
+c1.metric(label="Status", value=status, delta=d_val, delta_color=d_color)
+c2.metric("Docs", f"{current_docs:,}", delta=delta_docs if delta_docs != 0 else None)
+c3.metric("Total Index Size", f"{current_size} MB", delta=f"{delta_size:.2f} MB" if delta_size != 0 else None)
 
 if status != "ONLINE":
     st.error(f"**Connection Error:** {health.get('error', 'Unknown issue')}")

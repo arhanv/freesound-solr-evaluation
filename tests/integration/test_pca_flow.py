@@ -24,7 +24,7 @@ def test_pca_read_write_flow(solr_test_collection, solr_test_client):
     
     # 2. Test Reading Vectors
     source_target = f"{source_space}_synthetic"
-    vectors, sound_ids, child_docs = load_vectors_from_solr(source_target, solr_url=solr_test_collection)
+    vectors, sound_ids, child_docs, _ = load_vectors_from_solr(source_target, solr_url=solr_test_collection)
     
     assert len(vectors) == 5
     assert len(sound_ids) == 5

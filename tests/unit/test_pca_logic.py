@@ -40,7 +40,7 @@ def test_load_vectors_pagination_logic(mocker):
     
     m_pysolr = mocker.patch("search.pca.pysolr.Solr", return_value=m_solr)
     
-    vectors, sound_ids, child_docs = load_vectors_from_solr("test")
+    vectors, sound_ids, child_docs, _ = load_vectors_from_solr("test")
     
     assert len(vectors) == 4
     assert sound_ids == [1, 2, 3, 4]
