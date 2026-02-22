@@ -131,7 +131,7 @@ def get_similarity_spaces():
             name = facets[i]
             count = facets[i+1]
             
-            dim = "Unknown"
+            dim = 0
             est_size_mb = 0.0
             sample = solr.search(f'similarity_space:{name}', rows=1).docs
             if sample:

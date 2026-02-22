@@ -17,6 +17,7 @@ if root_dir not in sys.path:
 from search.configs import SOLR_URL
 from search.stats_utils import get_content_distribution, get_similarity_spaces
 from search.generate_and_index_synthetics import cleanup_synthetic, SYNTHETIC_CLEANUP_QUERY
+from search.pca import delete_pca_vectors
 from search.index_to_solr import SolrIndexer
 from sidebar_utils import render_sidebar_health
 
@@ -90,12 +91,22 @@ if spaces:
         return t
     
     df_spaces['tags'] = df_spaces.apply(generate_tags, axis=1)
-    df_spaces = df_spaces.sort_values(['source_space', 'dimension'])
+    df_spaces['is_source'] = df_spaces['name'].apply(lambda x: "_pca" not in x)
+    df_spaces = df_spaces.sort_values(by=['source_space', 'is_source', 'dimension'], ascending=[True, False, False]).reset_index(drop=True)
 
     # 1. Detailed Table
     cols = ["name", "dimension", "count", "size_mb", "tags"]
-    st.dataframe(
-        df_spaces[cols],
+    df_display = df_spaces[cols]
+
+    def highlight_source(row):
+        is_source = "source-space" in row["tags"]
+        color = "rgba(241, 196, 15, 0.15)" if is_source else ""
+        return [f"background-color: {color}" if color else ""] * len(row)
+
+    styled_df = df_display.style.apply(highlight_source, axis=1)
+
+    event = st.dataframe(
+        styled_df,
         column_config={
             "name": "Space Name",
             "dimension": "Dimensions",
@@ -107,9 +118,67 @@ if spaces:
                 color="auto"
             )
         },
+        use_container_width=True,
         hide_index=True,
-        width='stretch'
+        on_select="rerun",
+        selection_mode="single-row"
     )
+
+    if event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_space = df_display.iloc[selected_idx]
+        space_name = selected_space["name"]
+        num_vecs = selected_space["count"]
+        tags = selected_space["tags"]
+        
+        # Omit options if it is real-data source-space
+        if "source-space" in tags and "real-data" in tags:
+            pass # No actions shown for real data source spaces
+        else:
+            st.markdown(f"**Selected Space:** `{space_name}`")
+            act_col1, act_col2 = st.columns([3, 1]) # Right align the actions
+            
+            with act_col2:
+                with st.popover(f"Delete Space", use_container_width=True, icon=":material/delete:"):
+                    st.markdown(f"**Delete `{space_name}`**\n\nThis will remove **{num_vecs:,}** vector documents from Solr.")
+                    
+                    # 1. Show the checkbox BEFORE the button so the user can decide
+                    model_path = os.path.join(root_dir, "models", "pca", f"{space_name}.pkl")
+                    delete_model_checked = False
+                    
+                    if "_pca" in space_name and os.path.exists(model_path):
+                        delete_model_checked = st.checkbox("Also delete saved .pkl model?", key=f"del_model_{space_name}")
+
+                    # 2. The Delete Button
+                    if st.button("Yes, delete everything selected", type="primary", key=f"del_vecs_{space_name}"):
+                        with st.spinner("Processing deletion..."):
+                            try:
+                                # --- PART A: Delete Vectors (Always happens) ---
+                                if "_pca" in space_name:
+                                    import builtins
+                                    original_input = builtins.input
+                                    builtins.input = lambda _: 'y'
+                                    try:
+                                        delete_pca_vectors(space_name, solr_url=SOLR_URL)
+                                    finally:
+                                        builtins.input = original_input
+                                elif "synthetic" in space_name:
+                                    cleanup_synthetic(SOLR_URL)
+                                
+                                # --- PART B: Delete Files (Only if checkbox was checked) ---
+                                if delete_model_checked:
+                                    os.remove(model_path)
+                                    json_path = model_path.replace(".pkl", ".json")
+                                    if os.path.exists(json_path):
+                                        os.remove(json_path)
+                                    st.toast("Model files removed!")
+
+                                st.toast(f"Deleted vectors for {space_name}!")
+                                time.sleep(1)
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"Failed: {e}")
 
     # 2. Vector Count Distribution (Horizontal Grouped Bar)
     st.subheader("Distribution of Vectors by Similarity Space")
@@ -210,6 +279,6 @@ with c3:
 auto_refresh = st.segmented_control(label="Auto Refresh? (5s)",
     options=["Yes", "No"],
     default="No", width="stretch")
-if auto_refresh:
+if auto_refresh == "Yes":
     time.sleep(5)
     st.rerun()
