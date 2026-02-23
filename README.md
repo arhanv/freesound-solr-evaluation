@@ -29,6 +29,10 @@ docker-compose up -d
 ```
 python search/setup.py
 ```
+4. Open the Streamlit dashboard
+```
+streamlit run dashboard/Home.py
+```
 
 ## Loading Data (Indexing)
 The `index_to_solr.py` script indexes sound metadata and vectors from your configured `SEARCH_DOCUMENTS_DIR`.
