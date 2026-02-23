@@ -329,14 +329,17 @@ with tab_analyze:
 
     # --- BIC Plot ---
     with st.expander("BIC Curve (from find-k run)", expanded=True):
-        models_with_bic = df_models_a[df_models_a["BIC Data"].notnull() & (df_models_a["Status"].apply(lambda s: "Latest" in s))]
+        if df_models_a.empty:
+            models_with_bic = df_models_a
+        else:
+            models_with_bic = df_models_a[df_models_a["BIC Data"].notnull() & (df_models_a["Status"].apply(lambda s: "Latest" in s))]
         
         if not models_with_bic.empty:
             model_options = models_with_bic["File"].tolist()
             selected_bic_model = st.selectbox("Select Model to view BIC trace", options=model_options, key="bic_select")
             
-            row = models_with_bic[models_with_bic["File"] == selected_bic_model].iloc[0]
-            bic_data = row["BIC Data"]
+            bic_row = models_with_bic[models_with_bic["File"] == selected_bic_model].iloc[0]
+            bic_data = bic_row["BIC Data"]
             
             import plotly.express as px
             import pandas as pd
@@ -350,7 +353,7 @@ with tab_analyze:
                           title=f"BIC Score vs. K for {selected_bic_model}")
             
             # Highlight optimal K
-            optimal_k = row["K (components)"]
+            optimal_k = bic_row["K (components)"]
             fig.add_vline(x=optimal_k, line_dash="dash", line_color="green", annotation_text=f"Optimal K={optimal_k}")
             
             st.plotly_chart(fig, width='stretch')
@@ -463,9 +466,10 @@ with tab_manage:
     st.subheader("Manage Spaces")
     if synth_spaces:
         spaces_info = [s for s in get_similarity_spaces() if s["name"] in synth_spaces]
-        df_spaces = pd.DataFrame(spaces_info) 
+        df_spaces = pd.DataFrame(spaces_info)
+        space_display_cols = [c for c in ["name", "dimension", "count"] if c in df_spaces.columns]
         ev_space = st.dataframe(
-            df_spaces[["name", "dimension", "count"]], 
+            df_spaces[space_display_cols], 
             on_select="rerun", 
             selection_mode="single-row",
             hide_index=True,
@@ -566,7 +570,7 @@ with tab_manage:
 
 # ── Progress monitor (shared across all tabs) ─────────────────────────────────
 st.divider()
-status_label = "PCA in progress..." if st.session_state.synth_process else "Ready."
+status_label = "Synthetic data operation in progress..." if st.session_state.synth_process else "Ready."
 
 with st.status(status_label, expanded=bool(st.session_state.synth_process)) as status:
     progress_bar = st.progress(0, text="Initializing...")
