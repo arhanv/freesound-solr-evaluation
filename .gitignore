@@ -6,3 +6,4 @@ models/pca/*
 models/gmm/*
 *.archive
 data_flow.md
+venv
