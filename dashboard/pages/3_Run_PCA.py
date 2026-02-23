@@ -213,7 +213,7 @@ def config_content():
         with r2.container():
             dims_raw = st.text_input(
                 "Target Dimensions",
-                value="128",
+                value="32 64 128 256",
                 key="pca_dims",
                 help="Space-separated list of target dimensions, e.g. `64 128 256`.",
             )
