@@ -264,11 +264,11 @@ class SolrManagementAPI:
 
     def reload_collection(self):
         """Reload the collection to clear caches."""
-        # Use the Collections API (admin endpoint for broader compatibility)
-        reload_url = urljoin(self.base_url, "solr/admin/collections")
+        # Use the Cores API for standalone Solr instances
+        reload_url = urljoin(self.base_url, "solr/admin/cores")
         params = {
             "action": "RELOAD",
-            "name": self.collection
+            "core": self.collection
         }
         try:
             resp = requests.get(reload_url, params=params, timeout=self.request_timeout)

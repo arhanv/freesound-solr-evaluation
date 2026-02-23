@@ -1,0 +1,171 @@
+[
+    {
+        "config": {
+            "defaultAggregated": false,
+            "geoms": [
+                "auto"
+            ],
+            "coordSystem": "generic",
+            "limit": -1,
+            "timezoneDisplayOffset": 0
+        },
+        "encodings": {
+            "dimensions": [
+                {
+                    "fid": "latency_ms",
+                    "name": "latency_ms",
+                    "basename": "latency_ms",
+                    "semanticType": "quantitative",
+                    "analyticType": "dimension",
+                    "offset": 0
+                },
+                {
+                    "fid": "similarity_space",
+                    "name": "similarity_space",
+                    "basename": "similarity_space",
+                    "semanticType": "nominal",
+                    "analyticType": "dimension",
+                    "offset": 0
+                },
+                {
+                    "fid": "seed",
+                    "name": "seed",
+                    "basename": "seed",
+                    "semanticType": "quantitative",
+                    "analyticType": "dimension",
+                    "offset": 0
+                },
+                {
+                    "fid": "label",
+                    "name": "label",
+                    "basename": "label",
+                    "semanticType": "nominal",
+                    "analyticType": "dimension",
+                    "offset": 0
+                },
+                {
+                    "fid": "gw_mea_key_fid",
+                    "name": "Measure names",
+                    "analyticType": "dimension",
+                    "semanticType": "nominal"
+                }
+            ],
+            "measures": [
+                {
+                    "fid": "query_index",
+                    "name": "query_index",
+                    "basename": "query_index",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum",
+                    "offset": 0
+                },
+                {
+                    "fid": "sound_id",
+                    "name": "sound_id",
+                    "basename": "sound_id",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum",
+                    "offset": 0
+                },
+                {
+                    "fid": "recall",
+                    "name": "recall",
+                    "basename": "recall",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum",
+                    "offset": 0
+                },
+                {
+                    "fid": "gw_count_fid",
+                    "name": "Row count",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum",
+                    "computed": true,
+                    "expression": {
+                        "op": "one",
+                        "params": [],
+                        "as": "gw_count_fid"
+                    }
+                },
+                {
+                    "fid": "gw_mea_val_fid",
+                    "name": "Measure values",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum"
+                }
+            ],
+            "rows": [
+                {
+                    "fid": "recall",
+                    "name": "recall",
+                    "basename": "recall",
+                    "analyticType": "measure",
+                    "semanticType": "quantitative",
+                    "aggName": "sum",
+                    "offset": 0
+                }
+            ],
+            "columns": [
+                {
+                    "fid": "latency_ms",
+                    "name": "latency_ms",
+                    "basename": "latency_ms",
+                    "semanticType": "quantitative",
+                    "analyticType": "dimension",
+                    "offset": 0
+                }
+            ],
+            "color": [
+                {
+                    "fid": "similarity_space",
+                    "name": "similarity_space",
+                    "basename": "similarity_space",
+                    "semanticType": "nominal",
+                    "analyticType": "dimension",
+                    "offset": 0
+                }
+            ],
+            "opacity": [],
+            "size": [],
+            "shape": [],
+            "radius": [],
+            "theta": [],
+            "longitude": [],
+            "latitude": [],
+            "geoId": [],
+            "details": [],
+            "filters": [],
+            "text": []
+        },
+        "layout": {
+            "showActions": false,
+            "showTableSummary": false,
+            "stack": "stack",
+            "interactiveScale": false,
+            "zeroScale": true,
+            "size": {
+                "mode": "full",
+                "width": 320,
+                "height": 200
+            },
+            "format": {},
+            "geoKey": "name",
+            "resolve": {
+                "x": false,
+                "y": false,
+                "color": false,
+                "opacity": false,
+                "shape": false,
+                "size": false
+            },
+            "renderer": "vega-lite"
+        },
+        "visId": "gw_tQAw",
+        "name": "Chart 1"
+    }
+]
