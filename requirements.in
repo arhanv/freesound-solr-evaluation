@@ -1,0 +1,16 @@
+altair
+matplotlib
+numpy
+pandas
+plotly
+pygwalker
+pysolr
+pytest
+pytest-mock
+pytest-faker
+requests
+scikit-learn
+seaborn
+streamlit
+streamlit-extras
+tqdm

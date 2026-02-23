@@ -12,11 +12,17 @@ import pandas as pd
 import pysolr
 from tqdm import tqdm
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
-from configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+# Add project root to sys.path so 'search' package is found
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+from search.configs import SOLR_URL, SOLR_BASE_URL, COLLECTION_NAME
+from search.stats_utils import calculate_space_size_mb
 
 NUM_SOUNDS_FOR_EVAL = 2000
-N_NEIGHBORS = 50
+DEFAULT_RETRIEVE_N = 50
+DEFAULT_METRIC_K = 50
 
 class SearchEvaluationResult:
     """Stores and serializes evaluation results."""
@@ -86,7 +92,7 @@ def similarity_search_solr(query_vector, similarity_space, k, solr_url=SOLR_URL)
     Args:
         query_vector (list): Query vector.
         similarity_space (str): Similarity space name.
-        k (int): Number of neighbors to retrieve.
+        k (int): Number of neighbors to retrieve (retrieve_n).
         solr_url (str): Solr collection URL.
 
     Returns:
@@ -157,8 +163,8 @@ def calculate_ndcg_weighted(retrieved, ground_truth, k=50):
     return dcg / idcg if idcg > 0 else 0.0
 
 def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth_results=None,
-                               similarity_space='laion_clap', k=N_NEIGHBORS, output_dir=None,
-                               warmup=0, solr_url=SOLR_URL, seed=42, save_details=False):
+                               similarity_space='laion_clap', retrieve_n=DEFAULT_RETRIEVE_N, metric_k=DEFAULT_METRIC_K, output_dir=None,
+                               warmup=0, solr_url=SOLR_URL, seed=42, save_details=False, dashboard=False):
     """Evaluate similarity search latency and recall.
 
     Args:
@@ -167,7 +173,8 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         ground_truth_results (list, optional): Ground truth nearest neighbors for recall calculation.
                                                 Each element is a list of ground truth neighbor IDs.
         similarity_space (str): Similarity space to evaluate.
-        k (int): Number of nearest neighbors to retrieve.
+        retrieve_n (int): Number of nearest neighbors to retrieve from Solr.
+        metric_k (int): Number of neighbors to consider for recall/nDCG metrics.
         output_dir (str, optional): Directory to save results (results.csv, detailed metrics).
                                     If None, results are not saved to disk.
         warmup (int): Number of warmup queries before measurement.
@@ -196,17 +203,43 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
 
     if warmup > 0:
         print(f"Running {warmup} warmup queries (sampled from target set)...")
+        if dashboard:
+            print(f"[PHASE] Warmup: {similarity_space}")
         # Sample random indices for warmup to avoid caching effects of a single vector
-        warmup_indices = np.random.choice(len(target_sound_vecs), size=warmup, replace=True)
-        for idx in tqdm(warmup_indices, desc="Warmup"):
-             _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, k, solr_url)
+        warmup_indices = np.random.choice(len(target_sound_ids), warmup, replace=False)
+        # Handle dashboard vs CLI progress
+        pbar = tqdm(warmup_indices, desc="Warmup", disable=dashboard)
+        for i, idx in enumerate(pbar):
+             _, w_time = similarity_search_solr(target_sound_vecs[idx].tolist(), similarity_space, retrieve_n, solr_url)
              warmup_times.append(w_time)
+             if dashboard and i % 10 == 0:
+                print(f"[PROGRESS] {int(i / len(warmup_indices) * 100)}")
+
+    # Construct Ground Truth Mapping to protect against size mismatches
+    gt_map = {}
+    if ground_truth_results:
+        # We assume the incoming target_sound_ids match the ground truth list length exactly
+        if len(ground_truth_results) != len(target_sound_ids):
+            print(f"Warning: Discrepancy between ground_truth array size ({len(ground_truth_results)}) and target ID array size ({len(target_sound_ids)}). This may cause missing metric evaluations.")
+        
+        # Create dictionary map: ID -> ground_truth_array
+        # Use zip to safely pair them up to the length of the shortest array
+        for sid, gt in zip(target_sound_ids, ground_truth_results):
+            gt_map[sid] = gt
 
     print(f"Querying Solr with {len(target_sound_vecs)} target sounds...")
 
     empty_result_count = 0
-    for i, query_vec in enumerate(tqdm(target_sound_vecs, desc="Running Solr queries")):
-        results, query_time = similarity_search_solr(query_vec.tolist(), similarity_space, k, solr_url)
+    total_queries = len(target_sound_vecs)
+    # Main evaluation loop
+    if dashboard:
+        print(f"[PHASE] Querying: {similarity_space}")
+        
+    pbar = tqdm(target_sound_vecs, desc="Running Solr queries", disable=dashboard)
+    for i, query_vec in enumerate(pbar):
+        results, query_time = similarity_search_solr(query_vec.tolist(), similarity_space, retrieve_n, solr_url)
+        if dashboard and i % 5 == 0:
+            print(f"[PROGRESS] {int(i / total_queries * 100)}")
 
         # Extract parent sound IDs from child documents (_root_ field points to parent)
         query_sound_id = target_sound_ids[i]
@@ -216,7 +249,7 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
                 parent_id = int(doc['_root_'])
                 if parent_id != query_sound_id:
                     neighbors.append(parent_id)
-                if len(neighbors) >= k:
+                if len(neighbors) >= max(retrieve_n, metric_k):
                     break
 
         if not neighbors:
@@ -227,16 +260,22 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
         query_times.append(query_time)
         retrieved_neighbors.append(neighbors)
 
-        if ground_truth_results and i < len(ground_truth_results):
-            gt_neighbors = [sid for sid in ground_truth_results[i] if sid != query_sound_id][:k]
-            gt_set = set(gt_neighbors)
-            retrieved_set = set(neighbors[:k])
-            # Recall Calculation (Set-based)
-            recall = len(gt_set & retrieved_set) / k if k > 0 else 0.0
-            recalls.append(recall)
-            # NDCG Calculation (Order-sensitive)
-            ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, k)
-            ndcgs.append(ndcg_val)
+        if ground_truth_results:
+            # Safely fetch ground truth for this specific parent ID
+            raw_gt_neighbors = gt_map.get(query_sound_id)
+            if raw_gt_neighbors is not None:
+                gt_neighbors = [sid for sid in raw_gt_neighbors if sid != query_sound_id][:metric_k]
+                gt_set = set(gt_neighbors)
+                retrieved_set = set(neighbors[:metric_k])
+                # Recall Calculation (Set-based)
+                recall = len(gt_set & retrieved_set) / metric_k if metric_k > 0 else 0.0
+                recalls.append(recall)
+                # NDCG Calculation (Order-sensitive)
+                ndcg_val = calculate_ndcg_weighted(neighbors, gt_neighbors, metric_k)
+                ndcgs.append(ndcg_val)
+            else:
+                # This vector wasn't in the ground truth pool, skip metrics silently
+                pass
 
     if empty_result_count > 0:
         print(f"\n\nWarning: {empty_result_count}/{len(target_sound_vecs)} queries returned 0 results")
@@ -245,25 +284,36 @@ def evaluate_similarity_search(target_sound_vecs, target_sound_ids, ground_truth
     warmup_mean = np.mean(warmup_times) if warmup_times else 0.0
     warmup_penalty_pct = ((warmup_mean - mean_latency) / mean_latency * 100) if mean_latency > 0 and warmup_times else 0.0
 
+    # Calculate Space Size
+    try:
+        count_query = f'content_type:v AND similarity_space:{similarity_space}'
+        total_vectors = pysolr.Solr(solr_url).search(count_query, rows=0).hits
+        space_size_mb = calculate_space_size_mb(total_vectors, target_sound_vecs.shape[1])
+    except Exception as e:
+        print(f"Warning: Failed to calculate space size: {e}")
+        space_size_mb = 0.0
+
     performance_metrics = {
         'latency_p50': np.percentile(query_times, 50),
         'latency_p95': np.percentile(query_times, 95),
         'latency_p99': np.percentile(query_times, 99),
         'mean_latency': mean_latency,
-        'qps': 1000 / mean_latency if mean_latency > 0 else 0,
+        'qps': 1000.0 / mean_latency if mean_latency > 0 else 0.0,
         'recall_mean': np.mean(recalls) if recalls else 0.0,
         'recall_std': np.std(recalls) if recalls else 0.0,
         'ndcg_mean': np.mean(ndcgs) if ndcgs else 0.0,
         'ndcg_std': np.std(ndcgs) if ndcgs else 0.0,
         'empty_results': empty_result_count,
         'warmup_mean': warmup_mean,
-        'warmup_penalty_pct': warmup_penalty_pct
+        'warmup_penalty_pct': warmup_penalty_pct,
+        'space_size_mb': space_size_mb
     }
 
     result = SearchEvaluationResult(
         configs={
             'similarity_space': similarity_space,
-            'n_neighbors': k,
+            'retrieve_n': retrieve_n,
+            'metric_k': metric_k,
             'query_size': len(target_sound_ids),
             'index_num_docs': index_size,
             'index_num_sounds': index_num_sounds,
@@ -327,11 +377,35 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
     print(f"Loading vectors from '{similarity_space}'...")
     query = f'content_type:v AND similarity_space:{similarity_space}'
 
+    results_docs = []
     if specific_sound_ids is not None:
-        # Load all vectors and filter to specific IDs (avoids complex query)
-        results = solr.search(query, rows=100000, fl='*')
+        # Load specific IDs using batching to avoid URL length limits
+        # and to ensure we find exactly the requested IDs
+        batch_size = 500
+        all_ids = list(set(specific_sound_ids)) # Unique IDs
+        
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            # specific_sound_ids are ints, _root_ is string in Solr
+            # Construct boolean OR query for _root_
+            id_query = " OR ".join([str(sid) for sid in batch])
+            fq = f"_root_:({id_query})"
+            
+            try:
+                # We expect at most 'batch_size' results per batch
+                res = solr.search(query, fq=fq, rows=batch_size, fl='*,_root_')
+                results_docs.extend(res.docs)
+            except Exception as e:
+                print(f"Error loading batch {i}-{i+batch_size}: {e}")
+                
+        # Mock a results object with combined docs
+        class MockResults:
+            def __init__(self, docs):
+                self.docs = docs
+        results = MockResults(results_docs)
+            
     else:
-        results = solr.search(query, rows=num_sounds, fl='*')
+        results = solr.search(query, rows=num_sounds, fl='*,_root_')
 
     vectors = []
     sound_ids = []
@@ -348,7 +422,6 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
     if not vector_field:
         raise Exception(f"Could not find vector field for similarity_space={similarity_space}. Available fields: {list(results.docs[0].keys())}")
 
-    # Build lookup if filtering to specific IDs
     specific_ids_set = set(specific_sound_ids) if specific_sound_ids else None
 
     for doc in tqdm(results.docs, desc=f"Loading {similarity_space} vectors"):
@@ -360,7 +433,13 @@ def load_target_sounds(similarity_space, num_sounds=NUM_SOUNDS_FOR_EVAL, specifi
                 sound_ids.append(sound_id)
 
     if len(vectors) == 0:
-        raise Exception(f"No vectors found for similarity_space={similarity_space}")
+        # Debugging aid
+        sample_keys = list(results.docs[0].keys()) if results.docs else "None"
+        raise Exception(f"No vectors loaded for {similarity_space}. \n"
+                        f"Found {len(results.docs)} docs, but filtering retained 0. \n"
+                        f"Vector field: {vector_field}. \n"
+                        f"Sample keys: {sample_keys}. \n"
+                        f"Specific IDs provided: {len(specific_ids_set) if specific_ids_set else 'None'}")
 
     # If specific IDs were requested, ensure we maintain the same order
     if specific_sound_ids is not None:
@@ -387,25 +466,34 @@ if __name__ == "__main__":
     parser.add_argument('--ground-truth-file', default=None, help='Load ground truth from pickle file')
     parser.add_argument('--save-ground-truth', default=None, help='Save ground truth to pickle file')
     parser.add_argument('--num-sounds', type=int, default=NUM_SOUNDS_FOR_EVAL, help=f'Number of query sounds (default: {NUM_SOUNDS_FOR_EVAL})')
-    parser.add_argument('--k', type=int, default=N_NEIGHBORS, help=f'Number of neighbors (default: {N_NEIGHBORS})')
+    parser.add_argument('--retrieve-n', type=int, default=DEFAULT_RETRIEVE_N, help=f'Number of neighbors to retrieve from Solr (default: {DEFAULT_RETRIEVE_N})')
+    parser.add_argument('--metric-k', type=int, default=DEFAULT_METRIC_K, help=f'Top K elements to consider for metrics (default: {DEFAULT_METRIC_K})')
+    parser.add_argument('--k', type=int, default=None, help='Legacy: overrides both --retrieve-n and --metric-k if provided.')
     parser.add_argument('--output-dir', default=None, help='Directory to save results (results.csv, details, etc.)')
     parser.add_argument('--results-csv', default='eval/results/eval_results.csv', help='Legacy: CSV file to save results if output-dir is not set')
     parser.add_argument('--warmup', type=int, default=500, help='Number of warmup queries (default: 500)')
     parser.add_argument('--clear-cache', action='store_true', help='Reload collection to clear cache before running')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for query selection')
     parser.add_argument('--save-details', action='store_true', help='Save detailed per-query metrics')
+    parser.add_argument('--dashboard', action='store_true', help='Enable machine-readable progress logging')
+    parser.add_argument('--solr-url', type=str, default=SOLR_URL, help='Solr collection URL (defaults to configs.SOLR_URL)')
 
     args = parser.parse_args()
+
+    # Handle legacy --k flag
+    if args.k is not None:
+        args.retrieve_n = args.k
+        args.metric_k = args.k
 
     # Set random seed
     np.random.seed(args.seed)
 
     if args.clear_cache:
-        print("Reloading collection to clear cache...")
-        from solrapi import SolrManagementAPI
-        api = SolrManagementAPI(SOLR_BASE_URL, COLLECTION_NAME)
-        api.reload_collection()
-        time.sleep(2)
+        print("Forcing Solr commit to invalidate caches...")
+        import pysolr
+        solr = pysolr.Solr(args.solr_url)
+        solr.commit()
+        time.sleep(1)
 
     # Ensure output directory exists if specified
     if args.output_dir and not os.path.exists(args.output_dir):
@@ -421,7 +509,7 @@ if __name__ == "__main__":
         target_ids = gt_result.target_sound_ids
     elif args.ground_truth_space:
         print(f"Computing ground truth from '{args.ground_truth_space}'...")
-        gt_vecs, target_ids = load_target_sounds(args.ground_truth_space, args.num_sounds)
+        gt_vecs, target_ids = load_target_sounds(args.ground_truth_space, args.num_sounds, solr_url=args.solr_url)
         
         # If calculating ground truth, we can also save it if output_dir is provided
         gt_save_path = args.save_ground_truth
@@ -433,11 +521,14 @@ if __name__ == "__main__":
             target_ids,
             ground_truth_results=None,
             similarity_space=args.ground_truth_space,
-            k=args.k,
+            retrieve_n=args.retrieve_n,
+            metric_k=args.metric_k,
             output_dir=None, # Don't save main metrics here yet
             warmup=args.warmup,
+            solr_url=args.solr_url,
             seed=args.seed,
-            save_details=False
+            save_details=False,
+            dashboard=args.dashboard
         )
         ground_truth = gt_result.retrieved_neighbors
         
@@ -448,7 +539,8 @@ if __name__ == "__main__":
     target_vecs, target_ids = load_target_sounds(
         args.space,
         args.num_sounds,
-        specific_sound_ids=target_ids
+        specific_sound_ids=target_ids,
+        solr_url=args.solr_url
     )
 
     # Determine the results CSV path for legacy saving if output_dir is not used
@@ -469,9 +561,12 @@ if __name__ == "__main__":
         target_ids,
         ground_truth_results=ground_truth,
         similarity_space=args.space,
-        k=args.k,
+        retrieve_n=args.retrieve_n,
+        metric_k=args.metric_k,
         output_dir=args.output_dir,
         warmup=args.warmup,
+        solr_url=args.solr_url,
         seed=args.seed,
-        save_details=args.save_details
+        save_details=args.save_details,
+        dashboard=args.dashboard
     )

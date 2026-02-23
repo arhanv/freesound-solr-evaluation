@@ -1,6 +1,13 @@
 import json
-from solrapi import SolrManagementAPI
-import configs
+import os
+import sys
+
+# Add project root to sys.path so 'search' package is found when running script directly
+if __name__ == "__main__" or __name__.startswith("search"):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from search.solrapi import SolrManagementAPI
+import search.configs as configs
 
 schema = json.load(open(configs.SEARCH_SCHEMA_PATH))
 delete_defaults = json.load(open(configs.DELETE_DEFAULT_FIELDS_SCHEMA_PATH))
