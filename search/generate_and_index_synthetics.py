@@ -64,13 +64,30 @@ def generate_and_index(source_space, n_synthetic, gm_model, solr_url=SOLR_URL, b
     print(f"Generating {n_synthetic} synthetic embeddings...")
     target_space = f"{source_space}_synthetic"
     
-    current_id = SYNTHETIC_ID_START
+    # Determine starting ID dynamically to prevent overwriting existing synthetics across runs
+    try:
+        # Search for highest synthetic ID
+        query_str = f'content_type:s AND id:[{SYNTHETIC_ID_START} TO *]'
+        results = indexer.solr.search(query_str, sort='id desc', rows=1)
+        if results.docs:
+            current_id = int(results.docs[0]['id']) + 1
+            # Ensure it's at least the start boundary
+            current_id = max(current_id, SYNTHETIC_ID_START)
+        else:
+            current_id = SYNTHETIC_ID_START
+    except Exception as e:
+        print(f"Warning: Could not fetch max ID, defaulting to {SYNTHETIC_ID_START}. Error: {e}")
+        current_id = SYNTHETIC_ID_START
+
+
+        
     total_batches = (n_synthetic // batch_size) + 1
+    generated_so_far = 0
     
     for _ in tqdm(range(total_batches), desc="Indexing synthetic batches"):
         
         # Determine actual size for last batch
-        current_batch_size = min(batch_size, n_synthetic - (current_id - SYNTHETIC_ID_START))
+        current_batch_size = min(batch_size, n_synthetic - generated_so_far)
         if current_batch_size <= 0:
             break
             
@@ -103,6 +120,7 @@ def generate_and_index(source_space, n_synthetic, gm_model, solr_url=SOLR_URL, b
         indexer.commit()  # Flush logs and reclaim space every batch!
         
         current_id += current_batch_size
+        generated_so_far += current_batch_size
     
     print("Finalizing index (optimizing)...")
     requests.get(f"{solr_url}/update?optimize=true")
@@ -111,6 +129,25 @@ def generate_and_index(source_space, n_synthetic, gm_model, solr_url=SOLR_URL, b
 def get_synthetic_count(indexer):
     """Returns the current number of documents flagged as 'is_synthetic:true'."""
     return indexer.solr.search('is_synthetic:true', rows=0).hits
+
+def delete_synthetic_space(space_name, solr_url=SOLR_URL):
+    """Deletes a specific synthetic similarity space's vectors.
+    
+    Like PCA deletion, this targets the child documents belonging to the space.
+    To purge the associated parent dummy sounds, use full cleanup.
+    """
+    indexer = SolrIndexer(solr_url)
+    
+    # Target vectors in this specific space
+    query = f'content_type:v AND similarity_space:{space_name}'
+    
+    print(f"Cleaning up synthetic space vectors: {space_name}")
+    
+    indexer.solr.delete(q=query)
+    indexer.commit()
+    requests.get(f"{solr_url}/update?optimize=true")
+    print(f"Successfully deleted vectors for space {space_name}")
+
 
 def cleanup_synthetic(solr_url=SOLR_URL):
     """Removes all synthetic data from the Solr index.
@@ -183,7 +220,7 @@ def main():
     parser.add_argument('--fit', action='store_true', help='Fit a new GMM model')
     parser.add_argument('--find-k', action='store_true', help='Run BIC search to find best K')
     parser.add_argument('--generate', type=int, default=0, help='Number of synthetic vectors to generate')
-    parser.add_argument('--cleanup', action='store_true', help='Remove previously generated synthetic data')
+    parser.add_argument('--cleanup', nargs='?', const=True, help='Remove synthetic data. Provide space name for granular cleanup, or leave empty for all.')
     parser.add_argument('--subsample', type=int, default=None, 
                         help='Number of random samples to use for fitting (defaults to all)')
     
@@ -219,7 +256,10 @@ def main():
             return
 
     if args.cleanup:
-        cleanup_synthetic()
+        if isinstance(args.cleanup, str):
+            delete_synthetic_space(args.cleanup)
+        else:
+            cleanup_synthetic()
         if args.generate == 0 and not args.fit and not args.find_k:
             return
 
@@ -229,7 +269,7 @@ def main():
     if args.fit or args.find_k:
         manager = GMModel(n_components=args.k, seed=args.seed, max_iter=args.max_iter)
         
-        vectors, _, _ = load_vectors_from_solr(args.source_space)
+        vectors, _, _, metadata = load_vectors_from_solr(args.source_space)
         num_available = len(vectors)
 
         if args.subsample is not None and args.subsample < num_available:
@@ -237,8 +277,9 @@ def main():
             indices = np.random.choice(num_available, size=args.subsample, replace=False)
             vectors = vectors[indices]
 
+        bic_data = None
         if args.find_k:
-            best_k = manager.find_optimal_k(
+            best_k, k_range, bic_scores = manager.find_optimal_k(
                 vectors, 
                 min_k=args.min_k,
                 max_k=args.max_k,
@@ -246,6 +287,10 @@ def main():
                 plot_path=args.model_path.replace('.pkl', '_bic_plot.png')
             )
             manager.n_components = best_k
+            bic_data = {
+                'k_range': k_range,
+                'bic_scores': [float(s) for s in bic_scores]
+            }
             
         if not manager.model:
             manager.fit(vectors)
@@ -259,10 +304,17 @@ def main():
         with open(meta_path, 'w') as f:
             json.dump({
                 'k': manager.n_components,
+                'covariance_type': manager.covariance_type,
                 'seed': args.seed,
-                'n_vectors': len(vectors),
+                'max_iter': args.max_iter,
+                'n_training_samples': len(vectors),
+                'n_available_vectors': num_available,
+                'subsample': args.subsample,
+                'source_space': args.source_space,
+                'model_filename': os.path.basename(args.model_path),
+                'bic_data': bic_data,
+                **metadata,
                 'timestamp': datetime.now().isoformat(),
-                'source_space': args.source_space
             }, f, indent=2)
         print(f"Model metadata saved to {meta_path}")
     

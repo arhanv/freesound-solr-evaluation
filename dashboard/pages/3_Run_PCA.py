@@ -16,11 +16,9 @@ if root_dir not in sys.path:
 
 from search.stats_utils import get_similarity_spaces
 from sidebar_utils import render_sidebar_health
-
-st.set_page_config(page_title="Run PCA", layout="wide")
 render_sidebar_health()
 
-st.title("PCA Dimensionality Reduction")
+st.title("Apply PCA to Similarity Spaces")
 st.caption(
     "Fit PCA models on existing Solr vectors and/or re-index them at reduced dimensionality. "
     "Uses `search/pca.py` under the hood."
@@ -148,7 +146,7 @@ def config_content():
                 df_models.drop(columns=["Path", "Target Space", "Fingerprint", "Corpus Size", "ID Range"]), 
                 on_select="rerun", 
                 selection_mode="single-row",
-                use_container_width=True,
+                width='stretch',
                 hide_index=True
             )
             

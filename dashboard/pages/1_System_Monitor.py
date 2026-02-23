@@ -21,16 +21,10 @@ from search.pca import delete_pca_vectors
 from search.index_to_solr import SolrIndexer
 from sidebar_utils import render_sidebar_health
 
-st.set_page_config(
-    page_title="Freesound Solr Monitor",
-    layout="centered",
-)
-
 health = render_sidebar_health()
 
 st.title("Freesound Solr Monitor")
 
-st.subheader("Status")
 st.caption(f"Collection: {health.get('collection', 'Unknown')} | Last Refresh: {health.get('refresh_time', '--:--:--')}")
 
 c1, c2, c3 = st.columns(3)
@@ -61,9 +55,9 @@ delta_size = current_size - st.session_state['prev_size_mb']
 st.session_state['prev_num_docs'] = current_docs
 st.session_state['prev_size_mb'] = current_size
 
-c1.metric(label="Status", value=status, delta=d_val, delta_color=d_color)
-c2.metric("Docs", f"{current_docs:,}", delta=delta_docs if delta_docs != 0 else None)
-c3.metric("Total Index Size", f"{current_size} MB", delta=f"{delta_size:.2f} MB" if delta_size != 0 else None)
+c1.metric(label="Status", value=status, delta=d_val, delta_color=d_color, border=True, height="stretch")
+c2.metric("Docs", f"{current_docs:,}", delta=delta_docs if delta_docs != 0 else None, border=True, height="stretch")
+c3.metric("Total Index Size", f"{current_size} MB", delta=f"{delta_size:.2f} MB" if delta_size != 0 else None, border=True, height="stretch")
 
 if status != "ONLINE":
     st.error(f"**Connection Error:** {health.get('error', 'Unknown issue')}")
@@ -118,7 +112,7 @@ if spaces:
                 color="auto"
             )
         },
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row"
@@ -139,7 +133,7 @@ if spaces:
             act_col1, act_col2 = st.columns([3, 1]) # Right align the actions
             
             with act_col2:
-                with st.popover(f"Delete Space", use_container_width=True, icon=":material/delete:"):
+                with st.popover(f"Delete Space", width='stretch', icon=":material/delete:"):
                     st.markdown(f"**Delete `{space_name}`**\n\nThis will remove **{num_vecs:,}** vector documents from Solr.")
                     
                     # 1. Show the checkbox BEFORE the button so the user can decide

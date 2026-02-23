@@ -13,10 +13,10 @@ root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
+st.set_page_config(layout="wide")
+
 from search.stats_utils import get_similarity_spaces
 from sidebar_utils import render_sidebar_health
-
-st.set_page_config(page_title="Run Evaluation", layout="wide")
 
 render_sidebar_health()
 

@@ -64,23 +64,17 @@ class GMModel:
         best_bic = float('inf')
         best_k = min_k
 
-        for k in n_components_range:
-            print(f"  Fitting GMM with k={k}...", end='\r')
-            sys.stdout.write("\033[s") 
-            sys.stdout.flush()
-            
+        from tqdm import tqdm
+        for k in tqdm(n_components_range, desc="Finding optimal K"):
             gmm = GaussianMixture(
                 n_components=k, 
                 covariance_type='diag', 
                 random_state=self.seed,
                 max_iter=self.max_iter,
                 reg_covar=1e-5,
-                verbose=1
+                verbose=0
             )
             gmm.fit(data)
-
-            sys.stdout.write("\033[u\033[J\033[A\033[K")
-            sys.stdout.flush()
             
             bic = gmm.bic(data)
             bic_scores.append(bic)
@@ -109,7 +103,19 @@ class GMModel:
             plt.savefig(plot_path)
             print(f"BIC plot saved to {plot_path}")
 
-        return best_k
+        print(f"Optimal K value: {best_k} (BIC: {best_bic:.2f})")
+
+        if plot_path:
+            plt.figure(figsize=(10, 6))
+            plt.plot(n_components_range, bic_scores, marker='o')
+            plt.title('BIC Score vs. Number of Components')
+            plt.xlabel('Number of Components (k)')
+            plt.ylabel('BIC Score')
+            plt.grid(True)
+            plt.savefig(plot_path)
+            print(f"BIC plot saved to {plot_path}")
+
+        return best_k, list(n_components_range), bic_scores
 
     def fit(self, data):
         """Fits the internal GMM to the provided data.

@@ -19,11 +19,11 @@ def render_sidebar_health():
     
     # Robust display logic
     if status == 'ONLINE':
-        st.sidebar.success(f"🟢 Solr Online")
+        st.sidebar.success(f"●  Solr Online")
     elif status == 'DOWN':
-        st.sidebar.error(f"🔴 Solr Down (Docker?)")
+        st.sidebar.error(f"●  Solr Down (Docker?)")
     else:
-        st.sidebar.warning(f"🟡 Solr Unreachable")
+        st.sidebar.warning(f"●  Solr Unreachable")
 
     # Use a more explicit string for the timestamp
     st.sidebar.caption(f"Last update: {ts}")
